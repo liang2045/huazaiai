@@ -1,5 +1,5 @@
 import { memo, useMemo, useRef, useState } from 'react';
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react';
+import { Handle, Position, useReactFlow, type Node, type NodeProps } from '@xyflow/react';
 import { AlertCircle, Download, Image as ImageIcon, Loader2, Plus, RotateCcw, Sparkles, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { useUpstreamMaterials, type Material } from './useUpstreamMaterials';
 import { useOrderedMaterials } from './useOrderedMaterials';
@@ -55,7 +55,7 @@ const normalizeImageApiModel = (value: string) => (
 const ImageNode = ({ id, data, selected }: NodeProps) => {
   const update = useUpdateNodeData(id);
   const hasAutoOutput = useHasAutoOutput(id);
-  const { getEdges, getNodes } = useReactFlow();
+  const { getEdges, getNodes, setNodes } = useReactFlow();
   const { style, theme } = useThemeStore();
   const isPixel = style === 'pixel';
   const isDark = theme === 'dark';
@@ -67,6 +67,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
 
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [localGenerating, setLocalGenerating] = useState(false);
   const d = data as any;
   const previewZoom = typeof d?.previewZoom === 'number' ? d.previewZoom : 1;
   const setPreviewZoom = (next: number) => {
@@ -126,6 +127,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
   // 参考图上限(FAL 使用 FAL_REGISTRY.maxRefs,其他走原设计)
   const maxRefs = falDef?.maxRefs ?? modelDef.maxReferenceImages;
   const status: 'idle' | 'generating' | 'success' | 'error' = d?.status || 'idle';
+  const isGenerating = status === 'generating' || localGenerating;
   const imageUrl = d?.imageUrl as string | undefined;
   const hasImageResult = !!imageUrl;
   const imageWidth = Number(d?.imageWidth || 0);
@@ -161,6 +163,66 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
       imageWidth: width > 0 ? width : undefined,
       imageHeight: height > 0 ? height : undefined,
     };
+  };
+  const createSiblingResultNode = (
+    patch: Record<string, any>,
+    finalPrompt: string,
+    usedI2I: boolean,
+  ) => {
+    setNodes((nodes) => {
+      const source = nodes.find((n) => n.id === id);
+      if (!source) return nodes;
+      const sourceData = { ...((source.data as any) || {}) };
+      [
+        'imageUrl',
+        'imageUrls',
+        'imageWidth',
+        'imageHeight',
+        'status',
+        'progress',
+        'error',
+        'taskId',
+        'falResponseUrl',
+        'falEndpoint',
+      ].forEach((key) => delete sourceData[key]);
+
+      const parentId = (source as any).parentId as string | undefined;
+      const measured = (source as any).measured || {};
+      const sourceW = Number((source as any).width || measured.width || COMPACT_MEDIA_WIDTH);
+      const sourceH = Number((source as any).height || measured.height || COMPACT_MEDIA_WIDTH);
+      const sameParent = (n: Node) => ((n as any).parentId || undefined) === parentId;
+      const isOccupied = (x: number, y: number) =>
+        nodes.some((n) => {
+          if (n.id === id || !sameParent(n)) return false;
+          const nx = Number(n.position?.x || 0);
+          const ny = Number(n.position?.y || 0);
+          return Math.abs(nx - x) < 32 && Math.abs(ny - y) < 32;
+        });
+
+      const x = source.position.x + sourceW + 40;
+      let y = source.position.y;
+      for (let i = 0; i < 20 && isOccupied(x, y); i += 1) y += 40;
+      const maxZ = nodes.reduce((max, n) => Math.max(max, Number(n.zIndex || 0)), 0);
+      const type = source.type || 'image';
+      const newNode: Node = {
+        id: `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        type,
+        position: { x, y },
+        zIndex: maxZ + 10,
+        data: {
+          ...sourceData,
+          status: 'success',
+          progress: '100%',
+          ...patch,
+          lastPrompt: finalPrompt,
+          usedI2I,
+        },
+      };
+      if (parentId) {
+        (newNode as any).parentId = parentId;
+      }
+      return [...nodes, newNode];
+    });
   };
   const mediaActionClass = `flex h-7 w-7 items-center justify-center rounded-full border shadow-lg backdrop-blur transition ${
     isDark
@@ -293,7 +355,33 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
       logBus.error('生成中止: 缺少 prompt', src);
       return;
     }
-    update({ status: 'generating', progress: '0%', error: null });
+    const generateIntoSibling = hasImageResult;
+    const setProgress = (patch: Record<string, any>) => {
+      if (!generateIntoSibling) update(patch);
+    };
+    const commitResult = (
+      url: string,
+      result: { images?: Array<{ url?: string; width?: number; height?: number }> } | undefined,
+      usedI2I: boolean,
+    ) => {
+      const patch = imagePatchFromResult(url, result);
+      if (generateIntoSibling) {
+        createSiblingResultNode(patch, finalPrompt, usedI2I);
+      } else {
+        update({
+          status: 'success',
+          progress: '100%',
+          ...patch,
+          lastPrompt: finalPrompt,
+          usedI2I,
+        });
+      }
+    };
+    if (generateIntoSibling) {
+      setLocalGenerating(true);
+    } else {
+      update({ status: 'generating', progress: '0%', error: null });
+    }
     try {
       // collectUpstream 已返回「本地上传 + 上游接入」按用户拖拽顺序合并后的列表,
       // 这里不再二次叠加 refImages, 避免本地参考图重复传递。
@@ -352,7 +440,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
         });
         const taskId = submit.taskId;
         logBus.info(`MJ 任务已提交 taskId=${taskId} fullPrompt="${fullPrompt.slice(0, 120)}${fullPrompt.length > 120 ? '…' : ''}"`, src);
-        update({ progress: '15%', taskId });
+        setProgress({ progress: '15%', taskId });
         const maxPoll = Math.max(10, Math.min(2000, mjMaxPoll || 300));
         const interval = Math.max(1, Math.min(30, mjPollInt || 3)) * 1000;
         for (let i = 0; i < maxPoll; i++) {
@@ -364,7 +452,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
           if (q.progress) {
             const pct = parseInt(String(q.progress)) || 0;
             const out = `${Math.min(99, 15 + Math.floor(pct * 0.85))}%`;
-            update({ progress: out });
+            setProgress({ progress: out });
             if (i % 3 === 2) logBus.debug(`[${i + 1}/${maxPoll}] MJ progress=${q.progress} status=${q.status}`, src);
           }
           if (q.status === 'SUCCESS') {
@@ -381,14 +469,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
             }
             const final = main || all[0];
             logBus.success(`MJ 任务完成 → ${final}` + (grid.length ? ` (含 ${grid.length} 张子图)` : ''), src);
-            update({
-              status: 'success',
-              progress: '100%',
-              imageUrl: final,
-              imageUrls: all,
-              lastPrompt: finalPrompt,
-              usedI2I: allRefs.length > 0 || mjSrefImages.length > 0 || mjOrefImages.length > 0,
-            });
+            commitResult(final, { images: [{ url: final }] }, allRefs.length > 0 || mjSrefImages.length > 0 || mjOrefImages.length > 0);
             return;
           }
         }
@@ -413,12 +494,11 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
           sync: falSync,
           // gpt-fal
           mode: falKind === 'gpt-fal' ? falMode : undefined,
-          size: falKind === 'gpt-fal' ? (falSize === 'custom' ? 'custom' : 'auto') : undefined,
+          size: falKind === 'gpt-fal' ? falSize : undefined,
           customW: falKind === 'gpt-fal' && falSize === 'custom' ? falCustomW : undefined,
           customH: falKind === 'gpt-fal' && falSize === 'custom' ? falCustomH : undefined,
           quality: falKind === 'gpt-fal' ? falQuality : undefined,
           aspect_ratio: falKind === 'gpt-fal' ? aspectRatio : (falKind === 'nbpro-fal' ? nbAspect : undefined),
-          resolutionLevel: falKind === 'gpt-fal' ? sizeLevel : undefined,
           // nbpro-fal
           resolution: falKind === 'nbpro-fal' ? nbResolution : undefined,
           safety_tolerance: falKind === 'nbpro-fal' ? nbSafety : undefined,
@@ -431,13 +511,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
         // 同步完成
         if (submit.sync && submit.urls && submit.urls.length) {
           logBus.success(`FAL同步返回 → ${submit.urls[0]}`, src);
-          update({
-            status: 'success',
-            progress: '100%',
-            ...imagePatchFromResult(submit.urls[0], submit),
-            lastPrompt: finalPrompt,
-            usedI2I: allRefs.length > 0,
-          });
+          commitResult(submit.urls[0], submit, allRefs.length > 0);
           return;
         }
 
@@ -445,7 +519,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
         const { requestId, responseUrl, endpoint } = submit;
         if (!requestId || !responseUrl) throw new Error('FAL 提交后未获得 request_id/response_url');
         logBus.info(`FAL异步任务已提交 requestId=${requestId}`, src);
-        update({
+        setProgress({
           progress: '5%',
           taskId: requestId,
           falResponseUrl: responseUrl,
@@ -461,13 +535,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
             const url = q.urls?.[0];
             if (!url) throw new Error('FAL 任务完成但未返回图片');
             logBus.success(`FAL 任务完成 → ${url}`, src);
-            update({
-              status: 'success',
-              progress: '100%',
-              ...imagePatchFromResult(url, q),
-              lastPrompt: finalPrompt,
-              usedI2I: allRefs.length > 0,
-            });
+            commitResult(url, q, allRefs.length > 0);
             return;
           }
           if (st === 'failed') {
@@ -476,7 +544,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
           // 进度估算(15% 起步,到 95% 上限)
           const pct = Math.min(95, 15 + Math.floor((i / maxPoll) * 80));
           if (i % 5 === 4) {
-            update({ progress: `${pct}%` });
+            setProgress({ progress: `${pct}%` });
             logBus.debug(`[${i + 1}/${maxPoll}] FAL 轮询 status=${q.falStatus || 'IN_QUEUE'}`, src);
           }
         }
@@ -502,13 +570,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
       // 分支一:同步完成
       if (submit.sync && submit.urls && submit.urls.length) {
         logBus.success(`同步返回 → ${submit.urls[0]}`, src);
-        update({
-          status: 'success',
-          progress: '100%',
-          ...imagePatchFromResult(submit.urls[0], submit),
-          lastPrompt: finalPrompt,
-          usedI2I: allRefs.length > 0,
-        });
+        commitResult(submit.urls[0], submit, allRefs.length > 0);
         return;
       }
 
@@ -516,7 +578,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
       const taskId = submit.taskId;
       if (!taskId) throw new Error('未获取到 taskId 且无同步结果');
       logBus.info(`异步任务已提交 taskId=${taskId} 进入轮询…`, src);
-      update({ progress: submit.progress || '5%', taskId });
+      setProgress({ progress: submit.progress || '5%', taskId });
       // GPT2 / nano-banana / nano-banana-pro 标准路径轮询上限:
       //   maxPoll × interval = 1800 × 2s = 3600s = 60 分钟(避免复杂 prompt / 多参考图任务被 120s 提前中断)
       const maxPoll = 1800;     // 最多 1800 次
@@ -540,20 +602,14 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
         }
         if (q.progress && q.progress !== lastProg) {
           lastProg = q.progress;
-          update({ progress: q.progress });
+          setProgress({ progress: q.progress });
           logBus.debug(`[${i + 1}/${maxPoll}] status=${q.status} progress=${q.progress}`, src);
         }
         if (st === 'completed' || st === 'success' || st === 'done') {
           const url = q.urls?.[0];
           if (!url) throw new Error('任务完成但未返回图片');
           logBus.success(`任务完成 → ${url}`, src);
-          update({
-            status: 'success',
-            progress: '100%',
-            ...imagePatchFromResult(url, q),
-            lastPrompt: finalPrompt,
-            usedI2I: allRefs.length > 0,
-          });
+          commitResult(url, q, allRefs.length > 0);
           return;
         }
         if (st === 'failed' || st === 'failure' || st === 'error') {
@@ -565,7 +621,9 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
       const msg = e?.message || '生成失败';
       setError(msg);
       logBus.error(`生成失败: ${msg}`, src);
-      update({ status: 'error', error: msg });
+      if (!generateIntoSibling) update({ status: 'error', error: msg });
+    } finally {
+      if (generateIntoSibling) setLocalGenerating(false);
     }
   };
 
@@ -689,9 +747,11 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
 
       <div
         className={`block w-full overflow-hidden text-left transition-colors ${
-          isDark
-            ? 'bg-zinc-900/92 text-white shadow-[0_10px_30px_rgba(0,0,0,0.28)]'
-            : 'bg-zinc-100 text-zinc-900 shadow-sm'
+          imageUrl
+            ? 'bg-transparent text-inherit shadow-none'
+            : isDark
+              ? 'bg-[#34302b] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08),0_10px_24px_rgba(0,0,0,0.22)]'
+              : 'bg-[#ece7dd] text-zinc-900 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08),0_6px_18px_rgba(0,0,0,0.08)]'
         }`}
         style={imageBodyStyle}
         
@@ -719,7 +779,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
           <div className={`flex h-full w-full flex-col items-center justify-center ${
             isDark ? 'text-white/78' : 'text-zinc-600'
           }`}>
-            {status === 'generating' ? (
+            {isGenerating ? (
               <Loader2 size={22} className="animate-spin text-amber-300" />
             ) : (
               <ImageIcon size={24} className={isDark ? 'text-amber-200' : 'text-amber-600'} />
@@ -1349,10 +1409,10 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
         {/* 生成按钮(包含异步进度) */}
         <button
           onClick={handleGenerate}
-          disabled={status === 'generating'}
+          disabled={isGenerating}
           className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-medium disabled:opacity-50 transition-colors"
         >
-          {status === 'generating' ? (
+          {isGenerating ? (
             <>
               <Loader2 size={12} className="animate-spin" /> 生成中
             </>

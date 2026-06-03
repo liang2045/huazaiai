@@ -54,6 +54,23 @@ function applyClassifiedKey(settings, hint) {
   if (picked) settings.zhenzhenApiKey = picked;
 }
 
+function ensureKey(settings, res, hint, label) {
+  if (!settings) {
+    res.status(400).json({ success: false, error: '未找到 settings 文件，请先在设置中配置 API Key' });
+    return false;
+  }
+  applyClassifiedKey(settings, hint || '');
+  if (!settings.zhenzhenApiKey) {
+    const name = label || '贞贞工坊';
+    res.status(400).json({
+      success: false,
+      error: `未配置 ${name} 专属 API Key，且通用 zhenzhenApiKey 也为空`,
+    });
+    return false;
+  }
+  return true;
+}
+
 // ========== 工具: taskId → 实际使用的 apiKey 内存映射 ==========
 // submit 阶段根据 hint 选了分类 key 后，将 (taskId → key) 记下，
 // query/status 阶段优先从该 Map 恢复 key，
@@ -383,16 +400,13 @@ async function normalizeImageResponse(data) {
 
 router.post('/image', async (req, res) => {
   const settings = loadRawSettings();
-  if (!settings?.zhenzhenApiKey) {
-    return res.status(400).json({ success: false, error: '未配置贞贞工坊 API Key' });
-  }
   const {
     model, apiModel, paramKind: paramKindIn,
     prompt, n,
     aspect_ratio, image_size,
     images, image, size, quality,
   } = req.body || {};
-  applyClassifiedKey(settings, apiModel || model || '');
+  if (!ensureKey(settings, res, apiModel || model || '', '图像生成')) return;
   if (!prompt) return res.status(400).json({ success: false, error: 'prompt 必填' });
   const m = String(apiModel || model || '');
   const paramKind = paramKindIn || (m.includes('nano-banana') ? 'banana-ratio' : 'gpt-size');
@@ -441,13 +455,10 @@ router.post('/image', async (req, res) => {
 // ========================================================================
 router.post('/image/submit', async (req, res) => {
   const settings = loadRawSettings();
-  if (!settings?.zhenzhenApiKey) {
-    return res.status(400).json({ success: false, error: '未配置贞贞工坊 API Key' });
-  }
   try {
     const { model, apiModel, paramKind: paramKindIn, prompt, n,
             aspect_ratio, image_size, images, image, size, quality } = req.body || {};
-    applyClassifiedKey(settings, apiModel || model || '');
+    if (!ensureKey(settings, res, apiModel || model || '', '图像生成')) return;
     if (!prompt) return res.status(400).json({ success: false, error: 'prompt 不得为空' });
     const m = String(apiModel || model || '');
     const paramKind = paramKindIn || (m.includes('nano-banana') ? 'banana-ratio' : 'gpt-size');
@@ -485,16 +496,13 @@ router.post('/image/submit', async (req, res) => {
 // 查询异步图像任务状态
 router.get('/image/status/:tid', async (req, res) => {
   const settings = loadRawSettings();
-  if (!settings?.zhenzhenApiKey) {
-    return res.status(400).json({ success: false, error: '未配置贞贞工坊 API Key' });
-  }
   // 优先从 submit 阶段记录的 (taskId → key) 映射恢复，防止前端未传 model 导致 fallback 错 key。
   const remembered = recallTaskKey(req.params.tid);
   if (remembered) {
     settings.zhenzhenApiKey = remembered;
   } else {
     // 查询阶段可选传 ?model=xxx 让后端走对应分类 key（不传则用通用 fallback）
-    applyClassifiedKey(settings, String(req.query.model || ''));
+    if (!ensureKey(settings, res, String(req.query.model || ''), '图像生成')) return;
   }
   const tid = req.params.tid;
   try {
@@ -652,18 +660,15 @@ function fixFalResponseUrl(responseUrl, baseUrl, endpoint, requestId) {
 //   nbpro-fal 专属: { aspect_ratio, resolution, safety_tolerance, seed?, system_prompt?, enable_web_search?, image_mode?: 'image_url'|'base64' }
 router.post('/image/fal/submit', async (req, res) => {
   const settings = loadRawSettings();
-  if (!settings?.zhenzhenApiKey) {
-    return res.status(400).json({ success: false, error: '未配置贞贞工坊 API Key' });
-  }
   const {
     apiModel, prompt, images, n, format, sync,
     // gpt-fal
-    mode, size, customW, customH, quality, resolutionLevel,
+    mode, size, customW, customH, quality,
     // nbpro-fal
     aspect_ratio, resolution, safety_tolerance, seed,
     system_prompt, enable_web_search, image_mode,
   } = req.body || {};
-  applyClassifiedKey(settings, apiModel || '');
+  if (!ensureKey(settings, res, apiModel || '', '图像 FAL')) return;
   const apiKey = settings.zhenzhenApiKey;
   const baseUrl = config.ZHENZHEN_BASE_URL;
 
@@ -691,7 +696,7 @@ router.post('/image/fal/submit', async (req, res) => {
         customW,
         customH,
         aspectRatio: aspect_ratio,
-        resolution: resolutionLevel || resolution,
+        resolution,
       });
       payload = {
         prompt,
@@ -804,11 +809,8 @@ router.post('/image/fal/submit', async (req, res) => {
 //   返回: { status: 'pending'|'completed'|'failed', urls?, error? }
 router.post('/image/fal/query', async (req, res) => {
   const settings = loadRawSettings();
-  if (!settings?.zhenzhenApiKey) {
-    return res.status(400).json({ success: false, error: '未配置贞贞工坊 API Key' });
-  }
   const { responseUrl: rawUrl, endpoint, requestId } = req.body || {};
-  applyClassifiedKey(settings, endpoint || rawUrl || '');
+  if (!ensureKey(settings, res, endpoint || rawUrl || 'gpt-image-2-fal', '图像 FAL')) return;
   const apiKey = settings.zhenzhenApiKey;
   const baseUrl = config.ZHENZHEN_BASE_URL;
   const responseUrl = fixFalResponseUrl(rawUrl, baseUrl, endpoint, requestId);

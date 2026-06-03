@@ -53,7 +53,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     id: 'gpt-image-2',
     // 默认走标准 GPT2 路径，后端会按 aspect_ratio + 1K/2K/4K 映射像素尺寸并用白图占位。
     // FAL 子模型仍保留为手动选项，但 FAL 的 edit/gen 自动判断需另行修复。
-    apiModel: 'gpt-image-2',
+    apiModel: 'gpt-image-2-all',
     label: 'GPT Image 2',
     tabLabel: 'GPT2',
     provider: 'zhenzhen',

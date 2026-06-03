@@ -3490,8 +3490,8 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
             </div>
 
             {framePanelVisible && (
-              <div className={`mb-3 rounded-lg border p-2 ${isDark ? 'border-white/10 bg-white/[0.035]' : 'border-black/8 bg-black/[0.025]'}`}>
-                <div className="mb-1.5 flex items-center justify-between">
+              <div className={`mb-2 rounded-lg border p-1.5 ${isDark ? 'border-white/10 bg-white/[0.035]' : 'border-black/8 bg-black/[0.025]'}`}>
+                <div className="mb-1 flex items-center justify-between">
                   <span className={isDark ? 'text-[10px] text-white/55' : 'text-[10px] text-zinc-600'}>画框尺寸</span>
                   {frameCreateMode && (
                     <button
@@ -3503,23 +3503,23 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
                     </button>
                   )}
                 </div>
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="grid grid-cols-2 gap-1">
                   {FRAME_PRESETS.map((preset) => (
                     <button
                       key={preset.id}
                       type="button"
-                      className={`rounded-md border px-2 py-1.5 text-left text-[10px] transition ${
+                      className={`rounded-md border px-1.5 py-1 text-left text-[10px] leading-tight transition ${
                         isDark ? 'border-white/10 bg-white/6 text-white/72 hover:border-lime-300/45 hover:bg-lime-300/10' : 'border-black/10 bg-white text-zinc-700 hover:border-lime-600/35 hover:bg-lime-50'
                       }`}
                       title={`${preset.group} ${preset.w}×${preset.h}`}
                       onClick={() => applyFrameSizeChoice({ w: preset.w, h: preset.h, label: preset.label })}
                     >
-                      <span className="block font-medium">{preset.label}</span>
-                      <span className={isDark ? 'text-white/35' : 'text-zinc-400'}>{preset.group}</span>
+                      <span className="block truncate font-medium">{preset.label}</span>
+                      <span className={`block truncate ${isDark ? 'text-white/35' : 'text-zinc-400'}`}>{preset.group}</span>
                     </button>
                   ))}
                 </div>
-                <div className="mt-2 grid grid-cols-[1fr_1fr_auto] gap-1.5">
+                <div className="mt-1.5 grid grid-cols-[1fr_1fr_auto] gap-1">
                   <input
                     type="number"
                     min={MIN_FRAME_CREATE_W}
@@ -3529,7 +3529,7 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
                       if (selectedFrameNode) updateSelectedFrameSize({ w, h: activeFrameH });
                       else setCustomFrameSize((prev) => ({ ...prev, w }));
                     }}
-                    className={inspectorInputClass}
+                    className={`${inspectorInputClass} h-7 py-0.5`}
                     title="画框宽度"
                   />
                   <input
@@ -3541,12 +3541,12 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
                       if (selectedFrameNode) updateSelectedFrameSize({ w: activeFrameW, h });
                       else setCustomFrameSize((prev) => ({ ...prev, h }));
                     }}
-                    className={inspectorInputClass}
+                    className={`${inspectorInputClass} h-7 py-0.5`}
                     title="画框高度"
                   />
                   <button
                     type="button"
-                    className={`mt-1 rounded-md px-2 text-[10px] transition ${
+                    className={`rounded-md px-2 text-[10px] transition ${
                       isDark ? 'bg-lime-300/16 text-lime-200 hover:bg-lime-300/24' : 'bg-lime-600 text-white hover:bg-lime-700'
                     }`}
                     onClick={() => applyFrameSizeChoice({ w: activeFrameW, h: activeFrameH, label: `${activeFrameW}×${activeFrameH}` })}
@@ -3554,18 +3554,18 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
                     应用
                   </button>
                 </div>
-                <div className={isDark ? 'mt-1.5 text-[10px] text-white/35' : 'mt-1.5 text-[10px] text-zinc-400'}>
+                <div className={isDark ? 'mt-1 text-[10px] leading-tight text-white/35' : 'mt-1 text-[10px] leading-tight text-zinc-400'}>
                   {selectedFrameNode ? '当前画框将按新尺寸调整' : '未选中画框时会在视口中心生成'}
                 </div>
                 {selectedFrameNode && (
                   <button
                     type="button"
-                    className={`mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-md text-[11px] transition ${
+                    className={`mt-1.5 flex h-7 w-full items-center justify-center gap-1 rounded-md text-[10px] transition ${
                       isDark ? 'bg-white/10 text-white/78 hover:bg-white/16' : 'bg-zinc-900 text-white hover:bg-zinc-800'
                     }`}
                     onClick={() => void handleDownloadFrame(selectedFrameNode)}
                   >
-                    <Download size={13} />
+                    <Download size={12} />
                     下载画框 PNG
                   </button>
                 )}
@@ -3776,61 +3776,61 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
               </div>
             </div>
 
-            <div className={`mt-3 border-t pt-2 ${isDark ? 'border-white/10' : 'border-black/10'}`}>
-              <div className="mb-1.5 flex items-center justify-between">
+            <div className={`mt-2 border-t pt-1.5 ${isDark ? 'border-white/10' : 'border-black/10'}`}>
+              <div className="mb-1 flex items-center justify-between">
                 <span className={isDark ? 'text-[10px] text-white/45' : 'text-[10px] text-zinc-500'}>窗口顺序</span>
                 <span className={isDark ? 'text-[10px] text-white/35' : 'text-[10px] text-zinc-400'}>{layerItems.length}</span>
               </div>
-              <div className="max-h-64 space-y-1 overflow-y-auto pr-0.5">
+              <div className="max-h-48 space-y-0.5 overflow-y-auto pr-0.5">
                 {layerItems.length === 0 && (
-                  <div className={isDark ? 'rounded-md bg-white/5 px-2 py-2 text-[11px] text-white/35' : 'rounded-md bg-black/[0.03] px-2 py-2 text-[11px] text-zinc-400'}>
+                  <div className={isDark ? 'rounded-md bg-white/5 px-2 py-1.5 text-[10px] text-white/35' : 'rounded-md bg-black/[0.03] px-2 py-1.5 text-[10px] text-zinc-400'}>
                     当前画布没有窗口
                   </div>
                 )}
                 {layerItems.map(({ node, typeLabel, summary, sortable, level }) => {
                   const active = !!node.selected;
-                  const orderButtonClass = `flex h-6 w-6 items-center justify-center rounded transition disabled:cursor-not-allowed disabled:opacity-25 ${
+                  const orderButtonClass = `flex h-5 w-5 items-center justify-center rounded transition disabled:cursor-not-allowed disabled:opacity-25 ${
                     isDark ? 'text-white/60 hover:bg-white/10 hover:text-white' : 'text-zinc-500 hover:bg-black/5 hover:text-zinc-900'
                   }`;
                   return (
                     <div
                       key={node.id}
-                      className={`rounded-lg border p-1.5 transition ${
+                      className={`rounded-md border px-1.5 py-1 transition ${
                         active
                           ? isDark ? 'border-sky-300/40 bg-sky-400/10' : 'border-sky-500/30 bg-sky-500/10'
                           : isDark ? 'border-white/8 bg-white/[0.035]' : 'border-black/8 bg-black/[0.025]'
                       }`}
-                      style={{ marginLeft: level ? 14 : 0 }}
+                      style={{ marginLeft: level ? 10 : 0 }}
                     >
                       <button
                         type="button"
-                        className="flex w-full items-center gap-2 text-left"
+                        className="flex w-full items-center gap-1.5 text-left"
                         onClick={() => selectLayerNode(node.id)}
                         title={`${typeLabel} · ${node.id}`}
                       >
-                        <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] font-semibold ${
+                        <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded text-[9px] font-semibold ${
                           isDark ? 'bg-white/8 text-white/70' : 'bg-black/[0.04] text-zinc-600'
                         }`}>
                           {level ? '└' : typeLabel.slice(0, 1)}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className={`block truncate text-[11px] font-medium ${isDark ? 'text-white/78' : 'text-zinc-800'}`}>{typeLabel}</span>
-                          <span className={`block truncate text-[10px] ${isDark ? 'text-white/38' : 'text-zinc-500'}`}>{summary}</span>
+                          <span className={`block truncate text-[10px] font-medium leading-tight ${isDark ? 'text-white/78' : 'text-zinc-800'}`}>{typeLabel}</span>
+                          <span className={`block truncate text-[9px] leading-tight ${isDark ? 'text-white/38' : 'text-zinc-500'}`}>{summary}</span>
                         </span>
                         <span className={`shrink-0 text-[9px] ${isDark ? 'text-white/28' : 'text-zinc-400'}`}>{node.id.slice(-4)}</span>
                       </button>
-                      <div className="mt-1 flex justify-end gap-0.5">
+                      <div className="mt-0.5 flex justify-end gap-0.5">
                         <button type="button" className={orderButtonClass} disabled={!sortable} title="置顶" onClick={() => handleLayerOrder([node.id], 'front')}>
-                          <ChevronsUp size={12} />
+                          <ChevronsUp size={11} />
                         </button>
                         <button type="button" className={orderButtonClass} disabled={!sortable} title="上移" onClick={() => handleLayerOrder([node.id], 'forward')}>
-                          <ArrowUp size={12} />
+                          <ArrowUp size={11} />
                         </button>
                         <button type="button" className={orderButtonClass} disabled={!sortable} title="下移" onClick={() => handleLayerOrder([node.id], 'backward')}>
-                          <ArrowDown size={12} />
+                          <ArrowDown size={11} />
                         </button>
                         <button type="button" className={orderButtonClass} disabled={!sortable} title="置底" onClick={() => handleLayerOrder([node.id], 'back')}>
-                          <ChevronsDown size={12} />
+                          <ChevronsDown size={11} />
                         </button>
                       </div>
                     </div>

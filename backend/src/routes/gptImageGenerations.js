@@ -201,13 +201,14 @@ router.post('/image/submit', async (req, res, next) => {
   const { model, apiModel, prompt, n, aspect_ratio, image_size, size, quality } = req.body || {};
   if (!prompt) return res.status(400).json({ success: false, error: 'prompt 不得为空' });
 
-  const finalApiModel = apiModel || model;
+  const requestedApiModel = apiModel || model;
+  const finalApiModel = requestedApiModel;
   const ar = String(aspect_ratio || '').trim();
   const lvlUpper = String(image_size || '2K').toUpperCase();
   const lvlLower = lvlUpper.toLowerCase();
   const px = size || aspectToGptSize(ar, lvlUpper);
-  const apiKey = pickApiKey(settings, finalApiModel);
-  const useFalHighRes = lvlUpper === '2K' || lvlUpper === '4K';
+  const apiKey = pickApiKey(settings, requestedApiModel || finalApiModel);
+  const useFalHighRes = false;
 
   try {
     const result = useFalHighRes
@@ -235,7 +236,7 @@ router.post('/image/submit', async (req, res, next) => {
           if (info?.url) images.push(info);
         }
       }
-      return res.json({ success: true, data: { sync: true, status: 'completed', progress: '100%', urls: images.map((it) => it.url), images, raw: data, requestedSize: px, requestedResolution: lvlUpper } });
+      return res.json({ success: true, data: { sync: true, status: 'completed', progress: '100%', urls: images.map((it) => it.url), images, raw: data, requestedModel: requestedApiModel, upstreamModel: finalApiModel, requestedSize: px, requestedResolution: lvlUpper } });
     }
 
     if (norm.taskId) {
@@ -250,7 +251,7 @@ router.post('/image/submit', async (req, res, next) => {
           payload: result.payload,
         });
       }
-      return res.json({ success: true, data: { sync: false, taskId: norm.taskId, status: 'pending', progress: '0%', raw: data, requestedSize: px, requestedResolution: lvlUpper } });
+      return res.json({ success: true, data: { sync: false, taskId: norm.taskId, status: 'pending', progress: '0%', raw: data, requestedModel: requestedApiModel, upstreamModel: finalApiModel, requestedSize: px, requestedResolution: lvlUpper } });
     }
 
     return res.status(500).json({ success: false, error: 'GPT2 high-res 未获取到 task_id 且无同步图片: ' + JSON.stringify(data).slice(0, 300), raw: data, requestedSize: px, requestedResolution: lvlUpper });
