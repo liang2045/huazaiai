@@ -750,8 +750,8 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
           imageUrl
             ? 'bg-transparent text-inherit shadow-none'
             : isDark
-              ? 'bg-[#34302b] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08),0_10px_24px_rgba(0,0,0,0.22)]'
-              : 'bg-[#ece7dd] text-zinc-900 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08),0_6px_18px_rgba(0,0,0,0.08)]'
+              ? 'bg-white/20 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.12),0_10px_24px_rgba(0,0,0,0.18)]'
+              : 'bg-white/20 text-zinc-900 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08),0_6px_18px_rgba(0,0,0,0.08)]'
         }`}
         style={imageBodyStyle}
         

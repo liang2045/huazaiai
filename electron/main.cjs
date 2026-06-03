@@ -8,7 +8,7 @@ const fs = require('fs');
 
 const APP_NAME = 'Huazai AI';
 const LEGACY_USER_DATA_NAME = 'Liang';
-const APP_VERSION = '3.2.2';
+const APP_VERSION = '3.2.3';
 const BASE_PORT = 18766;
 
 let mainWindow = null;

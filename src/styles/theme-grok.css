@@ -229,12 +229,12 @@ html[data-theme-style="tech"][data-theme-mode="dark"] .react-flow__background-pa
   opacity: 1;
 }
 
-html[data-theme-style="tech"] .react-flow__edge-path {
+html[data-theme-style="tech"] .react-flow__edge-path:not(.huazai-edge-base-path) {
   stroke: var(--hz-line) !important;
 }
 
-html[data-theme-style="tech"] .react-flow__edge.selected .react-flow__edge-path,
-html[data-theme-style="tech"] .react-flow__edge:hover .react-flow__edge-path {
+html[data-theme-style="tech"] .react-flow__edge.selected .react-flow__edge-path:not(.huazai-edge-base-path),
+html[data-theme-style="tech"] .react-flow__edge:hover .react-flow__edge-path:not(.huazai-edge-base-path) {
   stroke: var(--hz-accent) !important;
 }
 
@@ -258,7 +258,7 @@ html[data-theme-style="tech"] .react-flow__controls-button:hover {
 }
 
 html[data-theme-style="tech"] .react-flow__node:not(.react-flow__node-groupBox):not(.react-flow__node-image):not(.react-flow__node-edit):not(.react-flow__node-upload):not(.react-flow__node-drawing-board):not(.react-flow__node-text) > div:first-child {
-  background: var(--hz-surface) !important;
+  background: rgba(255, 255, 255, 0.2) !important;
   border: 1px solid var(--hz-border) !important;
   border-radius: 10px !important;
   box-shadow: var(--hz-shadow) !important;
