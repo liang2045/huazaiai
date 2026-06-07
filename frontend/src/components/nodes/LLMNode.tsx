@@ -1,0 +1,740 @@
+import { memo, useCallback, useMemo, useRef, useState, useLayoutEffect, type CSSProperties } from 'react';
+import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react';
+import {
+  AlertCircle,
+  Brain,
+  Image as ImageIcon,
+  Loader2,
+  Plus,
+  Save,
+  Send,
+  Square,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { LLM_MODELS, DEFAULT_LLM_MODEL, isImageOutputLlm } from '../../providers/models';
+import {
+  fileToDataUrl,
+  generateLlm,
+  generateLlmStream,
+  type LlmContentPart,
+  type LlmMessage,
+} from '../../services/generation';
+import { useUpdateNodeData } from './useUpdateNodeData';
+import { useRunTrigger } from '../../hooks/useRunTrigger';
+import { logBus } from '../../stores/logs';
+import { PORT_COLOR } from '../../config/portTypes';
+import { useDragMaterialStore, type MaterialPayload } from '../../stores/dragMaterial';
+import { useMaterialDropTarget } from '../../hooks/useMaterialDropTarget';
+import { useUpstreamMaterials, type Material } from './useUpstreamMaterials';
+import { useOrderedMaterials } from './useOrderedMaterials';
+import MaterialPreviewSection from './MaterialPreviewSection';
+import { useThemeStore } from '../../stores/theme';
+
+/**
+ * LLM / Vision 节点 —— 完全对齐 gpt-image-2-web Chat (index.html L1600 / L8128~L8400)
+ *  - 5 个模型: gemini-3.1-flash-lite-preview(默认) / gpt-4o / gemini-3.1-pro-preview / gpt-5 / gpt-image-2-all
+ *  - temperature(0~2) + max_tokens(100~128000)
+ *  - 系统提示词 + localStorage 预设保存/加载
+ *  - 图像上传(多模态 vision)
+ *  - 多轮会话历史(可清空 / 新建会话)
+ *  - 流式 SSE 增量更新
+ *  - gpt-image-2-all 非流式 + 自动检测 generate_image 指令(简化版,标记生成提示)
+ *  - 上游: text(prompt) + image(URL/dataURL) 自动作为多模态用户消息
+ *  - 输出: data.prompt = 最后一条回复(下游可消费)
+ *  - useRunTrigger 接入批量运行总线
+ */
+
+interface ChatTurn {
+  role: 'user' | 'assistant';
+  text: string;
+  images?: string[];
+}
+
+const PRESET_KEY = 't8-llm-sys-presets';
+
+function loadPresets(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(PRESET_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+function savePresets(map: Record<string, string>) {
+  try {
+    localStorage.setItem(PRESET_KEY, JSON.stringify(map));
+  } catch {
+    /* noop */
+  }
+}
+
+/** 原生 wheel 事件拦截 —— 阻止冒泡到 ReactFlow 画布缩放 */
+function attachWheelBlock(el: HTMLElement | null) {
+  if (!el) return;
+  // 避免重复绑定
+  if ((el as any).__wheelBlocked) return;
+  (el as any).__wheelBlocked = true;
+  el.addEventListener(
+    'wheel',
+    (e: WheelEvent) => {
+      e.stopPropagation();
+    },
+    { passive: false, capture: false }
+  );
+  // 同时在 capture 阶段也拦截，防止 ReactFlow capture 监听
+  el.addEventListener(
+    'wheel',
+    (e: WheelEvent) => {
+      e.stopPropagation();
+    },
+    { passive: false, capture: true }
+  );
+}
+
+const LLMNode = ({ id, data, selected }: NodeProps) => {
+  const update = useUpdateNodeData(id);
+  const { getEdges, getNodes } = useReactFlow();
+  const [error, setError] = useState<string | null>(null);
+  const [streamingText, setStreamingText] = useState('');
+  const [presetMap, setPresetMap] = useState<Record<string, string>>(() => loadPresets());
+  const [pickedFiles, setPickedFiles] = useState<{ name: string; dataUrl: string }[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editText, setEditText] = useState('');
+
+  const sysRef = useCallback((el: HTMLTextAreaElement | null) => attachWheelBlock(el), []);
+  const userRef = useCallback((el: HTMLTextAreaElement | null) => attachWheelBlock(el), []);
+  const chatRef = useCallback((el: HTMLDivElement | null) => attachWheelBlock(el), []);
+
+  const d = data as any;
+  const model: string = d?.model || DEFAULT_LLM_MODEL;
+  const status: 'idle' | 'generating' | 'success' | 'error' = d?.status || 'idle';
+    // 用户输入框值: 改用 d.userPrompt 私有字段（避免与对下游开放的 d.prompt=助手回复 冲突，
+    // 否则下游 useUpstreamMaterials 会同时 pushText(d.prompt) + pushText(d.reply) 出现两条文本）
+    // 兼容旧画布: 若仅有 d.prompt 而无 d.userPrompt 也无 d.reply（即历史数据从未生成过），按用户输入读取一次
+    const localPrompt: string = d?.userPrompt ?? (d?.reply == null && typeof d?.prompt === 'string' ? d.prompt : '');
+  const systemPrompt: string = d?.system ?? '你是一个提示词专家，将用户的提示词优化';
+  const temperature: number = typeof d?.temperature === 'number' ? d.temperature : 0.7;
+  const maxTokens: number = typeof d?.maxTokens === 'number' ? d.maxTokens : 4096;
+  const useStream: boolean = d?.stream !== false; // 默认开
+  const history: ChatTurn[] = Array.isArray(d?.history) ? d.history : [];
+  const generatedImages: string[] = Array.isArray(d?.generatedImages) ? d.generatedImages : [];
+
+  const src = `LLM·${model}·#${id.slice(-4)}`;
+  const isImgOut = isImageOutputLlm(model);
+
+  // 上游素材实时订阅(跟随上游 data 变化重渲染) —— 用于节点内预览。
+  // 跟 ImageNode / SeedanceNode 同一套机制(useNodeConnections + useNodesData),
+  // 仅负责画面预览;实际发送仍走已有 collectUpstream 退路, 隐式零破坏。
+  const upstreamMats = useUpstreamMaterials(id);
+  const upstreamImages = upstreamMats.images;
+
+  // === 主题适配 (dark / pixel) ===
+  const { theme, style } = useThemeStore();
+  const isDark = theme === 'dark';
+  const isPixel = style === 'pixel';
+
+  // 本地拾取的图片 → 包装为 Material(origin='local') 与上游素材统一在 MaterialPreviewSection 里呈现
+  const localImageMaterials: Material[] = useMemo(
+    () =>
+      pickedFiles.map((f, i) => ({
+        id: `local::image:${i}:${f.name}`,
+        kind: 'image' as const,
+        url: f.dataUrl,
+        sourceNodeId: id,
+        origin: 'local' as const,
+        label: f.name || `本地${i + 1}`,
+      })),
+    [pickedFiles, id],
+  );
+  const allImagesUnordered = useMemo(
+    () => [...localImageMaterials, ...upstreamMats.images],
+    [localImageMaterials, upstreamMats.images],
+  );
+  const materialOrder: string[] = Array.isArray(d?.materialOrder) ? d.materialOrder : [];
+  const orderedImages = useOrderedMaterials(allImagesUnordered, materialOrder);
+  const orderedTexts = useOrderedMaterials(upstreamMats.texts, materialOrder);
+  const setMaterialOrder = (newOrder: string[]) => update({ materialOrder: newOrder });
+  const handleRemoveLocalMaterial = (m: Material) => {
+    if (m.origin !== 'local') return;
+    setPickedFiles((s) => s.filter((f) => f.dataUrl !== m.url));
+  };
+
+  // 上游: 收集 text + image (使用按用户拖拽顺序排好的 ordered 列表，与预览区呈现一致)
+  const collectUpstream = (): { text: string; images: string[] } => {
+    const texts = orderedTexts.map((t) => t.url).filter((s) => !!s);
+    // orderedImages 已包含上游与本地拾取，不需额外 concat pickedFiles
+    const images = orderedImages.map((m) => m.url).filter((s) => !!s);
+    void getEdges; // 保留引用避免 unused警告
+    void getNodes;
+    return { text: texts.join('\n').trim(), images };
+  };
+
+  // 选本地图片
+  const handlePickImages = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const next: { name: string; dataUrl: string }[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      if (!f.type.startsWith('image/')) continue;
+      try {
+        const url = await fileToDataUrl(f);
+        next.push({ name: f.name, dataUrl: url });
+      } catch (e: any) {
+        logBus.warn(`图片读取失败: ${e?.message || '未知错误'}`, src);
+      }
+    }
+    if (next.length) setPickedFiles((s) => [...s, ...next]);
+  };
+
+  const removePickedAt = (i: number) => setPickedFiles((s) => s.filter((_, idx) => idx !== i));
+
+  // 构造 messages 数组(对齐主项目 _doSendChat)
+  const buildMessages = (userText: string, userImages: string[]): LlmMessage[] => {
+    const msgs: LlmMessage[] = [];
+    if (systemPrompt.trim()) {
+      msgs.push({ role: 'system', content: systemPrompt.trim() });
+    }
+    // 注入历史
+    history.forEach((t) => {
+      if (t.role === 'user' && t.images && t.images.length) {
+        const parts: LlmContentPart[] = [];
+        if (t.text) parts.push({ type: 'text', text: t.text });
+        t.images.forEach((u) => parts.push({ type: 'image_url', image_url: { url: u } }));
+        msgs.push({ role: 'user', content: parts });
+      } else {
+        msgs.push({ role: t.role, content: t.text });
+      }
+    });
+    // 当前用户消息
+    if (userImages.length) {
+      const parts: LlmContentPart[] = [];
+      if (userText) parts.push({ type: 'text', text: userText });
+      userImages.forEach((u) => parts.push({ type: 'image_url', image_url: { url: u } }));
+      msgs.push({ role: 'user', content: parts });
+    } else {
+      msgs.push({ role: 'user', content: userText });
+    }
+    return msgs;
+  };
+
+  const handleSend = async () => {
+    setError(null);
+    setStreamingText('');
+    const upstream = collectUpstream();
+    const userText = (upstream.text || localPrompt || '').trim();
+    // 注: orderedImages 已包含本地 pickedFiles + 上游，不再重复拼接
+    const userImages = upstream.images;
+    if (!userText && userImages.length === 0) {
+      setError('未提供用户输入(无上游 prompt / 本地输入 / 图片)');
+      logBus.error('缺少用户输入', src);
+      return;
+    }
+
+    update({ status: 'generating', error: null });
+    logBus.info(`发送到 ${model} · ${useStream && !isImgOut ? 'SSE' : '非流式'} · imgs=${userImages.length}`, src);
+
+    const messages = buildMessages(userText, userImages);
+    // 立即把当前轮加入历史(回复占位)
+    const userTurn: ChatTurn = { role: 'user', text: userText, images: userImages };
+    const nextHistory: ChatTurn[] = [...history, userTurn];
+
+    try {
+      if (useStream && !isImgOut) {
+        // ====== 流式 ======
+        const ctrl = new AbortController();
+        abortRef.current = ctrl;
+        const { content } = await generateLlmStream(
+          { model, messages, temperature, max_tokens: maxTokens },
+          {
+            onDelta: (chunk) => setStreamingText((s) => s + chunk),
+            signal: ctrl.signal,
+          }
+        );
+        abortRef.current = null;
+        const replyText = content || '';
+        const finalHistory: ChatTurn[] = [...nextHistory, { role: 'assistant', text: replyText }];
+        update({
+          status: 'success',
+          history: finalHistory,
+          reply: replyText,
+          prompt: replyText, // 下游可作为 prompt 消费
+          // 记录本轮被「消化」的上游文本: 下游 useUpstreamMaterials 聚合时
+          // 会跳过这些文本, 避免「原始 TextNode + LLM 优化结果」同时出现 2 条文本。
+          consumedTexts: orderedTexts.map((t) => t.url).filter((s) => !!s),
+        });
+        setStreamingText('');
+        setPickedFiles([]);
+        logBus.success(`完成 · ${replyText.length} 字`, src);
+      } else {
+        // ====== 非流式(出图模型 或 关流式) ======
+        const res = await generateLlm({ model, messages, temperature, max_tokens: maxTokens });
+        const replyText = res.content || '';
+        const imgs = res.imageUrls || [];
+        const finalHistory: ChatTurn[] = [
+          ...nextHistory,
+          { role: 'assistant', text: replyText, images: imgs.length ? imgs : undefined },
+        ];
+        update({
+          status: 'success',
+          history: finalHistory,
+          reply: replyText,
+          prompt: replyText,
+          generatedImages: imgs.length ? [...generatedImages, ...imgs] : generatedImages,
+          imageUrls: imgs.length ? imgs : undefined,
+          // 同上: 记录被消化的上游文本(非流式分支)
+          consumedTexts: orderedTexts.map((t) => t.url).filter((s) => !!s),
+        });
+        setPickedFiles([]);
+        if (imgs.length) logBus.success(`完成 · ${replyText.length} 字 + ${imgs.length} 图`, src);
+        else logBus.success(`完成 · ${replyText.length} 字`, src);
+        // 注意:主项目还会进一步检测 streamed text 中的 generate_image JSON 块自动调
+        // /v1/images/generations。本节点版用户可通过下游 ImageNode 直接消费 prompt 输出实现等价能力。
+        if (isImgOut && /"generate_image"\s*:/.test(replyText) && imgs.length === 0) {
+          logBus.warn('检测到 generate_image 指令但上游未返回图,可将本节点 prompt 输出连到下游图像节点自动出图', src);
+        }
+      }
+    } catch (e: any) {
+      const msg = e?.message || '调用失败';
+      setError(msg);
+      update({ status: 'error', error: msg });
+      logBus.error(msg, src);
+    }
+  };
+
+  const handleStop = () => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+      logBus.warn('用户中止流式请求', src);
+    }
+  };
+
+  const handleClear = () => {
+    update({ history: [], reply: '', generatedImages: [], imageUrls: [] });
+    setStreamingText('');
+    setPickedFiles([]);
+  };
+
+  // 预设
+  const handleSavePreset = () => {
+    const name = window.prompt('为当前系统提示词命名:', '');
+    if (!name) return;
+    if (!systemPrompt.trim()) {
+      window.alert('系统提示词为空,无法保存');
+      return;
+    }
+    const map = { ...presetMap, [name]: systemPrompt };
+    savePresets(map);
+    setPresetMap(map);
+  };
+  const handleDeletePreset = (name: string) => {
+    const { [name]: _del, ...rest } = presetMap;
+    void _del;
+    savePresets(rest);
+    setPresetMap(rest);
+  };
+
+  // 双击编辑助手消息
+  const handleDoubleClickMsg = (idx: number) => {
+    const turn = history[idx];
+    if (turn?.role !== 'assistant') return;
+    setEditingIdx(idx);
+    setEditText(turn.text);
+  };
+  const handleEditBlur = () => {
+    if (editingIdx === null) return;
+    const newHistory = [...history];
+    newHistory[editingIdx] = { ...newHistory[editingIdx], text: editText };
+    // 最后一条助手消息编辑后同步更新输出
+    const lastAssistant = [...newHistory].reverse().find(t => t.role === 'assistant');
+    update({
+      history: newHistory,
+      reply: lastAssistant?.text || '',
+      prompt: lastAssistant?.text || '',
+      // 双击编辑助手回复后保持已有 consumedTexts (即上一次 send 时的上游)。
+      // 此处不重新计算: 用户编辑期间 orderedTexts 可能与生成时不同, 不应覆盖。
+    });
+    setEditingIdx(null);
+  };
+  const handleEditKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      setEditingIdx(null);
+    }
+  };
+
+  // 接入运行总线
+  useRunTrigger(id, handleSend);
+
+  // === 跨节点拖拽: source (生成图可拖出) ===
+  const startDrag = useDragMaterialStore((s) => s.start);
+  const beginMaterialDrag = (e: React.MouseEvent, payload: MaterialPayload) => {
+    if (e.button !== 0 || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    startDrag(payload, e.clientX, e.clientY);
+  };
+
+  // === 跨节点拖拽: target (接收 image → pickedFiles, text → prompt) ===
+  const handleDrop = (payload: MaterialPayload) => {
+    if (payload.kind === 'image' && payload.url) {
+      const url = payload.url;
+      setPickedFiles((s) => (s.some((f) => f.dataUrl === url) ? s : [...s, { name: url.split('/').pop() || 'dropped', dataUrl: url }]));
+      logBus.info(`已接受拖入图像 · ${url.slice(-40)}`, src);
+    } else if (payload.kind === 'text' && typeof payload.text === 'string') {
+      update({ userPrompt: payload.text });
+    }
+  };
+  const { dropProps, isAccepting } = useMaterialDropTarget({
+    id,
+    accepts: ['image', 'text'],
+    onDrop: handleDrop,
+  });
+
+  const handleColor = PORT_COLOR.text; // 输出 text;输入兼容 text+image(由 portTypes.llm 决定)
+  const llmThemeVars = {
+    '--llm-panel-bg': isDark ? 'rgba(20,20,22,.92)' : 'rgba(255,255,255,.96)',
+    '--llm-chat-bg': isDark ? 'rgba(20,20,22,.94)' : 'rgba(255,255,255,.98)',
+    '--llm-text': isDark ? '#ffffff' : '#18181b',
+    '--llm-text-soft': isDark ? 'rgba(255,255,255,.68)' : 'rgba(39,39,42,.72)',
+    '--llm-text-muted': isDark ? 'rgba(255,255,255,.42)' : 'rgba(82,82,91,.68)',
+    '--llm-border': isDark ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.12)',
+    '--llm-control-bg': isDark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.035)',
+    '--llm-option-bg': isDark ? '#18181b' : '#ffffff',
+    '--llm-bubble-bg': isDark ? 'rgba(255,255,255,.045)' : 'rgba(0,0,0,.04)',
+  } as CSSProperties;
+
+  const mainRef = useRef<HTMLDivElement>(null);
+  const hasChat = history.length > 0 || !!streamingText;
+
+  // 用 state + useLayoutEffect 精确测量左侧主体高度，确保右侧面板底部对齐
+  const [mainH, setMainH] = useState<number>(0);
+  useLayoutEffect(() => {
+    if (mainRef.current) {
+      setMainH(mainRef.current.offsetHeight);
+    }
+  });
+
+  return (
+    <div className="imade-llm-node relative flex items-start gap-0" style={llmThemeVars} {...dropProps}>
+      {/* 输入 Handle — 固定在整体左侧 */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!bg-sky-300 !border-0 !z-10"
+      />
+      {/* 输出 Handle — 固定在整体右侧 */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!bg-sky-300 !border-0 !z-10"
+      />
+    {/* 主体 */}
+    <div
+      ref={mainRef}
+      className={`imade-llm-main relative rounded-xl border-2 transition-all w-[320px] ${
+        selected ? 'border-emerald-400 shadow-2xl shadow-emerald-500/20' : isAccepting ? 'border-emerald-400' : 'border-white/15 hover:border-white/30'
+      }`}
+      style={{
+        background: 'var(--llm-panel-bg)',
+        color: 'var(--llm-text)',
+        boxShadow: isAccepting ? '0 0 0 2px rgba(52,211,153,.45), 0 12px 30px rgba(52,211,153,.18)' : undefined,
+      }}
+    >
+
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
+        <div
+          className="w-6 h-6 rounded flex items-center justify-center"
+          style={{ background: 'rgba(16,185,129,.2)', color: '#6ee7b7', boxShadow: 'inset 0 0 0 1px rgba(16,185,129,.45)' }}
+        >
+          <Brain size={13} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold text-white truncate">LLM / Vision</div>
+          <div className="text-[10px] text-white/40 truncate">独立 Key · 5 模型 · 多模态 · 流式</div>
+        </div>
+        {history.length > 0 && (
+          <button
+            onClick={handleClear}
+            title="清空会话 / 新建"
+            className="text-[10px] text-white/50 hover:text-rose-300 flex items-center gap-1"
+          >
+            <Plus size={11} /> 新会话
+          </button>
+        )}
+      </div>
+
+      <div className="p-2.5 space-y-2" onMouseDown={(e) => e.stopPropagation()}>
+        {/* 模型 */}
+        <div>
+          <label className="text-[10px] text-white/50 block mb-1">模型</label>
+          <select
+            value={model}
+            onChange={(e) => update({ model: e.target.value })}
+            className="w-full rounded bg-white/5 border border-white/10 px-2 py-1 text-xs text-white outline-none focus:border-white/30"
+          >
+            {LLM_MODELS.map((m) => (
+              <option key={m.value} value={m.value} className="bg-zinc-900">
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* 温度 / max_tokens / 流式 */}
+        <div className="grid grid-cols-3 gap-1.5">
+          <div>
+            <label className="text-[9px] text-white/40 block mb-0.5">temp</label>
+            <input
+              type="number"
+              min={0}
+              max={2}
+              step={0.1}
+              value={temperature}
+              onChange={(e) => update({ temperature: Math.max(0, Math.min(2, Number(e.target.value) || 0)) })}
+              className="w-full rounded bg-white/5 border border-white/10 px-1.5 py-1 text-[11px] text-white outline-none focus:border-white/30"
+            />
+          </div>
+          <div>
+            <label className="text-[9px] text-white/40 block mb-0.5">maxTok</label>
+            <input
+              type="number"
+              min={100}
+              max={128000}
+              step={100}
+              value={maxTokens}
+              onChange={(e) => update({ maxTokens: Math.max(100, Math.min(128000, Number(e.target.value) || 4096)) })}
+              className="w-full rounded bg-white/5 border border-white/10 px-1.5 py-1 text-[11px] text-white outline-none focus:border-white/30"
+            />
+          </div>
+          <div className="flex flex-col">
+            <label className="text-[9px] text-white/40 block mb-0.5">流式</label>
+            <label
+              className={`flex items-center justify-center gap-1 rounded px-1.5 py-1 text-[10px] cursor-pointer ${
+                useStream && !isImgOut
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                  : 'bg-white/5 text-white/40 border border-white/10'
+              } ${isImgOut ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <input
+                type="checkbox"
+                disabled={isImgOut}
+                checked={useStream && !isImgOut}
+                onChange={(e) => update({ stream: e.target.checked })}
+                className="hidden"
+              />
+              {isImgOut ? '关(出图)' : useStream ? 'SSE' : '关'}
+            </label>
+          </div>
+        </div>
+
+        {/* 系统提示词 + 预设 */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-[10px] text-white/50">系统提示词</label>
+            <div className="flex items-center gap-1">
+              <select
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) update({ system: presetMap[e.target.value] || '' });
+                }}
+                title="加载预设"
+                className="rounded bg-white/5 border border-white/10 px-1 py-0.5 text-[10px] text-white/70 outline-none"
+              >
+                <option value="" className="bg-zinc-900">
+                  — 预设 —
+                </option>
+                {Object.keys(presetMap).map((name) => (
+                  <option key={name} value={name} className="bg-zinc-900">
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleSavePreset}
+                title="保存当前为预设"
+                className="text-emerald-300 hover:text-emerald-200"
+              >
+                <Save size={11} />
+              </button>
+              {Object.keys(presetMap).length > 0 && (
+                <button
+                  onClick={() => {
+                    const name = window.prompt('删除预设(输入名字):', '');
+                    if (name && presetMap[name]) handleDeletePreset(name);
+                  }}
+                  title="删除预设"
+                  className="text-rose-300 hover:text-rose-200"
+                >
+                  <Trash2 size={11} />
+                </button>
+              )}
+            </div>
+          </div>
+          <textarea
+            ref={sysRef}
+            value={systemPrompt}
+            onChange={(e) => update({ system: e.target.value })}
+            placeholder="设定AI角色和行为..."
+            className="w-full h-36 resize-none rounded bg-white/5 border border-white/10 px-2 py-1 text-[11px] text-white outline-none focus:border-white/30 placeholder:text-white/30 overflow-y-auto"
+          />
+        </div>
+
+        {/* 用户输入 */}
+        <div>
+          <label className="text-[10px] text-white/50 block mb-1">用户输入(优先取上游)</label>
+          <textarea
+            ref={userRef}
+            value={localPrompt}
+            onChange={(e) => update({ userPrompt: e.target.value })}
+            placeholder="备用:无上游连接时使用"
+            className="w-full h-60 resize-none rounded bg-white/5 border border-white/10 px-2 py-1 text-[11px] text-white outline-none focus:border-white/30 placeholder:text-white/30 overflow-y-auto"
+          />
+        </div>
+
+        {/* 上游素材聚合预览区 (与 ImageNode / VideoNode / SeedanceNode 使用同一个组件，保证双主题下尺寸/样式一致) */}
+        <MaterialPreviewSection
+          texts={orderedTexts}
+          images={orderedImages}
+          order={materialOrder}
+          onReorder={setMaterialOrder}
+          onRemoveLocal={handleRemoveLocalMaterial}
+          selected={!!selected}
+          isDark={isDark}
+          isPixel={isPixel}
+          groups={['text', 'image']}
+          title="上游素材 + 本地图片"
+          imageUploadAction={{
+            onClick: () => fileInputRef.current?.click(),
+            title: '上传本地图片(多模态)',
+          }}
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          hidden
+          onChange={(e) => {
+            handlePickImages(e.target.files);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+          }}
+        />
+
+        {/* 按钮 */}
+        <div className="flex gap-1.5">
+          <button
+            onClick={handleSend}
+            disabled={status === 'generating'}
+            className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-xs font-medium disabled:opacity-50 transition-colors"
+          >
+            {status === 'generating' ? (
+              <>
+                <Loader2 size={12} className="animate-spin" /> 思考中...
+              </>
+            ) : (
+              <>
+                <Send size={12} /> 发送
+              </>
+            )}
+          </button>
+          {status === 'generating' && useStream && !isImgOut && (
+            <button
+              onClick={handleStop}
+              className="px-2 py-1.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs"
+              title="中止"
+            >
+              <Square size={11} />
+            </button>
+          )}
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-1 text-[10px] text-red-300 bg-red-500/10 border border-red-500/20 rounded px-2 py-1">
+            <AlertCircle size={11} className="mt-0.5 flex-shrink-0" />
+            <span className="break-all">{error}</span>
+          </div>
+        )}
+      </div>
+
+    </div>
+
+    {/* 右侧会话面板 */}
+    {hasChat && (
+      <div
+        ref={chatRef}
+          className={`imade-llm-chat llm-chat-panel w-[260px] rounded-xl border-2 pl-2.5 pt-2.5 pb-2.5 pr-0 ${
+            editingIdx !== null ? 'flex flex-col' : 'overflow-y-auto space-y-1.5'
+          } ${
+            selected ? 'border-emerald-400/60' : 'border-white/10'
+          }`}
+        style={{ background: 'var(--llm-chat-bg)', color: 'var(--llm-text)', height: mainH ? `${mainH}px` : undefined }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {editingIdx !== null ? (
+          /* 编辑模式：textarea 擑满整个面板，高度严格等于左侧节点 */
+          <textarea
+            autoFocus
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            onBlur={handleEditBlur}
+            onKeyDown={handleEditKeyDown}
+            className="w-full flex-1 resize-none rounded bg-white/10 border border-emerald-400/50 px-2 py-1.5 text-[11px] text-white outline-none focus:border-emerald-400 overflow-y-auto"
+          />
+        ) : (
+          /* 正常展示模式 */
+          <>
+        {history.map((t, i) => (
+          <div key={i} className="text-[11px]">
+            <div className={`text-[9px] mb-0.5 ${t.role === 'user' ? 'text-sky-300/60' : 'text-emerald-300/60'}`}>
+              {t.role === 'user' ? '🧑 用户' : '🤖 助手'}
+              {t.role === 'assistant' && <span className="text-white/30 ml-1">(双击编辑)</span>}
+            </div>
+            <div
+              onDoubleClick={() => handleDoubleClickMsg(i)}
+              className={`whitespace-pre-wrap text-white/80 bg-white/[0.03] rounded p-1.5 ${
+                t.role === 'assistant' ? 'cursor-pointer hover:bg-white/[0.06] transition-colors' : ''
+              }`}
+            >
+              {t.text || '[空]'}
+            </div>
+            {t.images && t.images.length > 0 && (
+              <div className="flex gap-1 flex-wrap mt-1">
+                {t.images.map((u, j) => (
+                  <img
+                    key={j}
+                    src={u}
+                    alt=""
+                    data-drag-source
+                    data-drag-kind="image"
+                    data-drag-url={u}
+                    data-drag-preview={u}
+                    data-drag-node-id={id}
+                    onMouseDown={(e) => beginMaterialDrag(e, { kind: 'image', url: u, sourceNodeId: id, previewUrl: u })}
+                    className="w-12 h-12 object-cover rounded border border-white/10 cursor-grab"
+                    title="按住 Ctrl 拖拽到其他节点"
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+        {streamingText && (
+          <div className="text-[11px]">
+            <div className="text-[9px] mb-0.5 text-emerald-300/60">🤖 助手 (流式中…)</div>
+            <div className="whitespace-pre-wrap text-white/80 bg-emerald-500/[0.08] rounded p-1.5 border border-emerald-500/20">
+              {streamingText}
+            </div>
+          </div>
+        )}
+          </>
+        )}
+      </div>
+    )}
+    </div>
+  );
+};
+
+export default memo(LLMNode);

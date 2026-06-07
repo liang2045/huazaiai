@@ -1,0 +1,15 @@
+{
+  "name": "client-shell",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build:frontend": "cd ..\\frontend && npm.cmd run build",
+    "build:service": "cd ..\\service && cargo build --release",
+    "app:dev": "npm.cmd run build:frontend && npm.cmd run build:service && tauri dev",
+    "app:build": "npm.cmd run build:frontend && npm.cmd run build:service && tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

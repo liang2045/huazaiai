@@ -1,0 +1,382 @@
+{
+  "$schema": "iMade / iMade 节点清单防丢失锁,任何节点删减都需要在 roadmap.md 中说明并更新本文件。",
+  "version": "2.0.0",
+  "lastUpdated": "2026-05-25-v2.0.0-imade-ai-brand-cleanup",
+  "currentProject": {
+    "nameZh": "iMade",
+    "nameEn": "iMade",
+    "uiBrand": "iMade",
+    "version": "2.0.0",
+    "installer": "dist_electron/iMade-Setup-2.0.0.exe",
+    "note": "T8PC、T8ENC1、T8-penguin-canvas 等历史名称在下方记录中作为上游兼容、历史环境变量、加密格式或排错资料保留。"
+  },
+  "packaging": {
+    "description": "Electron NSIS 桌面端打包链路(v1.2.1 起标准化, 严禁未明确指令主动打包)。完整产物拓扑: app.asar(electron/{main,loader,preload}.cjs + node_modules) + app.asar.unpacked(node_modules/sharp + @img) + resources/backend-enc/*.t8c(extraResources, asar 外) + resources/frontend(extraResources, asar 外)。前端版本号由 vite define 注入 __APP_VERSION__、Sidebar 左下角自动同步。",
+    "scripts": {
+      "encrypt": "cross-env ELECTRON_RUN_AS_NODE=1 electron electron/encrypt.cjs (必须用 Electron 内置 Node, 否则 V8 字节码版本不匹配)",
+      "prepack:enc": "npm run build && npm run encrypt (vite 前端产物 + bytenode .jsc + T8ENC1 加密 → build/backend-enc/*.t8c)",
+      "dist:dir": "npm run prepack:enc && electron-builder --win --x64 --dir && node electron/_post_build.cjs (只出 win-unpacked 目录, 不打 NSIS)",
+      "dist": "npm run prepack:enc && electron-builder --win --x64 && node electron/_post_build.cjs (出最终 iMade-Setup-${version}.exe)"
+    },
+    "runtimeEnvVars": {
+      "note": "以下 T8PC_* 为上游历史打包记录中的兼容环境变量名，保留用于排错参考；当前 Electron 入口仍可能保留历史内部命名以避免破坏调用。",
+      "T8PC_PACKAGED": "1=打包模式 / 0=开发模式 (由 main.cjs 在 startBackend 注入)",
+      "T8PC_USER_DATA": "app.getPath('userData') 路径 = %APPDATA%/t8-penguin-canvas, 后端数据/输入/输出/缩略图全部位于此",
+      "T8PC_FRONTEND_DIST": "打包模式 = path.join(process.resourcesPath, 'frontend'); 开发模式 = <project>/dist",
+      "T8PC_RES": "打包模式 = process.resourcesPath; 开发模式 = <project>"
+    },
+    "version": "2.0.0",
+    "installer": "dist_electron/iMade-Setup-2.0.0.exe (NSIS)",
+    "checklist": [
+      "运行 npm run encrypt 前确认已 npm install bytenode 且使用 Electron 内置 Node",
+      "backend/src/ 任何文件修改后必须重新 npm run encrypt 再打包",
+      "main.cjs 的窗口标题 / log 窗口 / IPC version 三处版本号必须与 package.json 同步",
+      "_post_build.cjs 验证 7 个 .t8c 必存在: server/config + routes/{canvas,settings,proxy,files,imageOps}",
+      "_post_build.cjs 验证 resources/frontend/index.html + assets/ 必存在",
+      "_post_build.cjs 自动清除任何意外混入的 resources/{app,backend}/src 明文目录",
+      "打包完成后必须实测启动 win-unpacked/iMade.exe 检查日志: 环境=production / GET / 200；历史用户数据目录兼容策略见 electron/main.cjs",
+      "打包成功后不上传 dist_electron 和 build 目录到 git (已在 .gitignore)"
+    ]
+  },
+  "layout": {
+    "mode": "single-column-sidebar",
+    "description": "画布管理 + 节点列表合并为一列 Sidebar，主体变为两栏布局(Sidebar + Canvas)，紧凑化节省约 96px 横向空间。",
+    "sidebarWidth": 256,
+    "canvasPanel": { "collapsible": true, "defaultOpen": true, "maxHeight": 224 }
+  },
+  "themes": {
+    "description": "双视觉风格 × 双明暗模式 = 4 套皮肤，由 zustand theme store 持久化，data-theme-style + data-theme-mode 注入到 html 根。切换按钮位于顶部工具条左侧（Sparkles / Cpu 图标）。",
+    "styles": {
+      "tech": {
+        "label": "科技风",
+        "description": "原 zinc 玻璃拟态深色 / 浅色，sky 色 accent",
+        "default": false
+      },
+      "pixel": {
+        "label": "像素糖果风",
+        "description": "Pindou Studio 风格：奶油底 + 2px 黑描边 + 糖果色块 + 大圆角胶囊 + 硬阴影 (neo-brutalism)（v1.2.0 起为新用户默认主题，搭配 light 模式；像素风下全局禁用 backdrop-filter 避免字模糊）",
+        "default": true,
+        "palette": {
+          "bg": "#FAF3E7",
+          "surface": "#FFFFFF",
+          "muted": "#F1E8D5",
+          "ink": "#1A1410",
+          "accents": {
+            "mint": "#A8E6C9",
+            "mintDeep": "#4ECDC4",
+            "pink": "#FFB5C5",
+            "pinkDeep": "#FF89A7",
+            "yellow": "#FFE08A",
+            "violet": "#C7B8F0",
+            "peach": "#FFCBA4",
+            "sky": "#B8DCEC"
+          }
+        },
+        "primaryAccent": "mint",
+        "radius": { "pill": 9999, "card": 16 },
+        "borderWidth": 2,
+        "shadow": { "hard": "3px 3px 0 #1A1410", "press": "1px 1px 0 #1A1410" },
+        "fonts": ["M PLUS Rounded 1c", "DotGothic16"]
+      }
+    },
+    "defaultStyle": "pixel",
+    "defaultMode": "light",
+    "modes": ["dark", "light"],
+    "persistKey": "t8-canvas-theme",
+    "htmlAttrs": ["data-theme-style", "data-theme-mode"]
+  },
+  "repository": "https://github.com/imade-ai/imade",
+  "totalNodes": 27,
+  "phases": {
+    "phase0": { "label": "基础设施", "status": "complete", "items": ["Vite + React 19 + TS", "Tailwind", "前端 11422 / 后端 18766 代理", "Express 后端骨架"] },
+    "phase1": { "label": "画布主体", "status": "complete", "items": ["xyflow 画布", "Sidebar 节点添加", "画布 CRUD", "三套 API Key 设置"] },
+    "phase2": { "label": "核心生成节点", "status": "complete", "items": ["贞贞工坊 / LLM 代理", "图像/视频/音频/LLM 节点"] },
+    "phase3": { "label": "异步任务节点", "status": "complete", "items": ["视频轮询", "Suno 三模式", "RunningHub 工作流", "sharp 工具箱"] },
+    "phase4": { "label": "全部 24 节点上线", "status": "complete", "items": ["辅助 / 数据组织 / 特殊 / 画板 / 浏览器 / 抽帧"] },
+    "phase5": { "label": "画布交互", "status": "complete", "items": ["Undo/Redo", "复制/粘贴/删除", "导入导出 JSON", "工作流模板", "CanvasToolbar"] },
+    "phase6": { "label": "批量执行 + 对齐辅助", "status": "complete", "items": ["运行总线 zustand store", "useRunTrigger 节点接入", "拓扑排序串行批量运行", "snap-to-grid + 智能对齐辅助线"] },
+    "phase7": { "label": "侧边栏合并", "status": "complete", "items": ["CanvasManager 收纳到 Sidebar 顶部可折叠区", "移除独立画布管理列", "三栏→两栏布局"] },
+    "phase8": { "label": "像素糖果风主题", "status": "complete", "items": ["theme store 扩展 themeStyle(tech|pixel) 双轨", "theme-pixel.css 全套 CSS 变量 + 工具类(px-card/px-btn/px-chip/px-input/px-row/px-modal-mask)", "Sidebar / CanvasToolbar / ApiSettings 框架级像素化", "24 节点零侵入 CSS 兜底层(react-flow__node 全局覆盖)", "ReactFlow 背景点 / 边线 / 对齐辅助线 像素化校色", "顶部 Sparkles/Cpu 切换按钮 + localStorage 持久化"] },
+    "phase9": { "label": "侧边栏分类重整", "status": "complete", "items": ["图像节点 label 从 'ZhenzhenMagic' 改为 '图像生成' 避免误解", "runninghub + rh-config 从 core 抽出,新建独立 'RH' 分类", "NodeCategory 类型增加 'rh' 枚举值", "ImageNode 模型选择从 select 重构为 3 TAB 胶囊切换(GPT2 / 香蕉2 / 香蕉Pro),对应主项目 gpt-image-2-web Tab 0/1/2"] },
+    "phase10": { "label": "上传节点 + 节点间联动(连接类型校验)", "status": "complete", "items": ["新增 UploadNode 上传素材节点(图像/视频/音频三合一,动态输出端口色)", "创建端口语义注册表 src/config/portTypes.ts(7 种 PortType + 25 节点 inputs/outputs 声明)", "ReactFlow 接入 isValidConnection ⏱ 预览阶段拦截不兼容连接(如文本不能连到文本、音频不能连到图像节点的 image 入口)", "连线按上游输出类型自动染色(文本=sky / 图像=amber / 视频=rose / 音频=violet / metadata=cyan / config=indigo / any=slate)", "upload 节点 outputs 动态依赖 data.uploadType,未选择类型时不可连出", "relay 中继节点以 'any' 透传,可接任何输入 / 输出任何类型"] },
+    "phase11": { "label": "FAL 渠道接入(gpt-image-2-fal + nano-banana-pro-fal)", "status": "complete", "items": ["严格对齐 gpt-image-2-web 主项目 FAL Queue API 接入规范(SKILL.md §FAL模型渠道接入规范)", "models.ts 新增 FAL_REGISTRY/FalParamKind/isFalModel + gpt-fal/nbpro-fal 两类参数体", "后端新增独立路由 POST /api/proxy/image/fal/submit + GET /api/proxy/image/fal/query(零破坏,不混入 /image/submit)", "baseUrl/fal 前缀代理 queue.fal.run,response_url 域名一次性修复", "submit 同步直返 images[](saveRemoteImage 转存),异步返 requestId+responseUrl+endpoint", "query 轮询规范:HTTP 非200时 body.status=IN_QUEUE/IN_PROGRESS 视为 pending,真错误才抛", "gpt-fal 自定义尺寸 16 倍数对齐(snap16),image_size 7 档枚举 + custom", "nbpro-fal aspect_ratio×resolution(1K/2K/4K) + safety_tolerance(1严-6松) + enable_web_search + system_prompt + seed + image_mode(image_url/base64)", "ImageNode FAL UI 蓝色边框面板 + FAL 专属 state(falXxx/nbXxx)与原标准模型(aspectRatio/sizeLevel)完全隔离,maxRefs 动态切换(gpt-fal=5 / nbpro-fal=8)", "FAL 子模型保持原 TAB 分类(gpt-image-2-fal 在 GPT2 TAB,nano-banana-pro-fal 在 香蕉Pro TAB),对齐主项目'不新增 Tab'原则", "前端轮询 600×3s = 30min 上限"] },
+    "phase12": { "label": "框选 + 右键组执行", "status": "complete", "items": ["ReactFlow selectionKeyCode=['Control','Meta'] + selectionMode=Partial ⏱ 左键拖动仍为平移画布,仅 Ctrl(或 Cmd) + 左键拖动进入框选模式", "multiSelectionKeyCode=['Control','Meta','Shift'] 点击节点时叠加多选", "onSelectionContextMenu / onNodeContextMenu / onPaneContextMenu 统一调度右键菜单状态 contextMenu", "右键菜单项:组执行(N) / 复制 / 快速复制 / 删除;节点上右键未选中则自动单选此节点", "抽取 runNodesByOrder(subNodes, subEdges) 通用引擎:仅保留子集内部的边作为依赖,拓扑排序后串行调 runBus(复用 handleRunAll 逻辑)", "对齐主项目 PenguinPravite/components/PebblingCanvas/index.tsx 的 createGroup/executeGroup 设计思路(selection 临时组 + 可执行节点顺序执行)", "帮助弹窗提示:左键拖动 = 平移 / Ctrl+左键拖动 = 框选 / 右键点击 = 弹菜单"] },
+    "phase13": { "label": "节点组容器(GroupBox)", "status": "complete", "items": ["新增 nodeTypes.groupBox 独立节点类型: 半透明色块 + 圆角边框 + zIndex=-1 在普通节点之下", "新增 stores/groupBus.ts: requestExecute / requestDelete 请求总线解耦 GroupBoxNode 与 Canvas", "新增 components/nodes/GroupBoxNode.tsx: 双主题适配(科技风/像素糖果风) + 顶部标题栏 + 颜色选择器(12色) + 双击改名 + 右上角▶执行/X解散按钮", "默认名字: 'My favourite girl is Go Younjung'", "右键菜单新增 「打组」 项: 计算 bounding box 包裹 + 30px padding + 40px 标题高,随机选一个颜色,排除 groupBox 自身防止嵌套", "拖动联动: Canvas.onNodeDrag 拦截 type==='groupBox' 计算 dx/dy 同步偏移 memberIds 节点,实现「拖组带走所有成员」", "组执行: 复用 handleRunGroup(memberIds),仅保留成员子集内部边作为依赖,拓扑排序后串行调 runBus", "设计思路对齐 PenguinPravite/components/PebblingCanvas/NodeGroupBox.tsx (GROUP_COLORS 调色板 / headerHeight=40 / 双击改名)"] },
+    "phase14": { "label": "Midjourney(Comfly) 渠道接入", "status": "complete", "items": ["严格对齐 gpt-image-2-web/index.html runMJ(L4437-4716) 与 uploadMJImage(L4407)", "后端 proxy.js 新增三条独立路由:POST /api/proxy/mj/imagine(speed_map: turbo/fast/relax → mj-turbo/mj-fast/mj-relax)、GET /api/proxy/mj/task/:id?speed= (URL 中 ai.comfly.chat 重写为 ai.t8star.cn)、POST /api/proxy/mj/upload(sref/oref 参考图上传换 URL)", "providers/models.ts 新增 paramKind='mj' + IMAGE_MODELS 第 4 项 midjourney + MJ_VERSIONS(11 项,默认 v 8.1) + MJ_RATIOS(7 比例,默认 1:1) + MJ_SPEEDS(turbo/fast/relax) + MJ_SVS(0/1/2/3,sv≠'1' 时才追加 --sv) + isMjModel()", "services/generation.ts 新增 buildMjPrompt(prompt 拼装规则: --{model} --ar {ar} [--no X] [--c N] [--s N] [--iw N] [--sw N] [--cw N] [--sv N] [--sref URL] [--oref URL]) + submitMjImagine + queryMjTask + uploadMjImage + fileToBase64Pure(去 dataURL 前缀)", "payload 严格对齐 runMJ: base64Array+instanceId:''+modes:[]+notifyHook:''+prompt+remix:true+state:''+ar+no+c+s+iw+tile:false+r:null+video:false+sw+cw+sv+seed", "响应判定: code===1 成功、其它 code 视为未就绪 continue;status==='FAILURE' 抛错;status==='SUCCESS' 取 image_url(主图) + image_urls(JSON string 解析为 [{url}] 数组)", "ImageNode.tsx 检测 paramKind==='mj' 时切换为 MJ 专用配置面板:版本/比例/速度/--c/--s/--iw/--sw/--sv/seed/--no/maxPoll/pollInt + sref(2 张)/oref(2 张) 上传组,handleGenerate 增加 MJ 分支(主图参考走 base64Array,sref/oref 走 uploadMjImage 换 URL),保留原 GPT2/香虉2/香蕉Pro/FAL TAB 与原模型路径零破坏", "前端轮询 maxPoll=300×3s = 15min 上限(可配置 10~2000 与 1~30s)"] },
+    "phase15": { "label": "跨节点素材拖拽(Ctrl+拖 图/视/音/文)", "status": "complete", "items": ["stores/dragMaterial.ts 新建 zustand store + MaterialKind/MaterialPayload/MATERIAL_DROP_EVENT(CustomEvent 名) + start/move/end 三状态机", "hooks/useMaterialDropTarget.ts 新建: 节点 target 注册 hook,返回 dropProps {data-drop-kinds, data-node-id} + isAccepting,按 MATERIAL_DROP_EVENT 下发 onDrop", "hooks/useMaterialDragSource.ts 新建: 素材 source 注册 hook(选用),主路径仅靠 data-drag-* 属性 + capture 拦截启动", "components/MaterialDragOverlay.tsx 新建: createPortal(document.body) 渲染跟随鼠标的幽灵缩略图; 全局监听 mousemove/mouseup 更新位置与探测 hover target; 拖拽期 body cursor=grabbing+user-select:none", "关键修复: ReactFlow v12 在 Pane 用 onPointerDownCapture 启动 userSelection,需在 document 原生 capture 阶段同时拦截 pointerdown / mousedown(pointerdown 先于 mousedown),仅拦 mousedown 难以赢得事件", "拦截策略: 仅 Ctrl/Meta + 左键 + 首个指针生效; 用 elementsFromPoint 穿透任何覆盖层查找 [data-drag-source]; 命中后 e.preventDefault()+e.stopPropagation()+e.stopImmediatePropagation() 阻止 Pane 启动选区; 未命中则放行,保留 Ctrl 画布/组空白处原有框选逻辑", "命中检测同步升级: mousemove 中也用 elementsFromPoint 穿透 SelectionPane 查找 [data-drop-kinds] target 节点", "全部 source 素材元素标记 data-drag-source / data-drag-kind / data-drag-url / data-drag-preview / data-drag-node-id: OutputNode/UploadNode/ImageNode/VideoNode/AudioNode/LLMNode/SeedanceNode 缩略图与播放器全覆盖", "节点 target 能力映射表: OutputNode 接收全部(image/video/audio/text); ImageNode接image→referenceImages,text→prompt; VideoNode接image→localRefImages,text→prompt; AudioNode接audio→localRefAudio,text→prompt; LLMNode接image→pickedFiles,text→prompt; SeedanceNode接image/video/audio/text 全支持", "本地拖入字段: d.localRefImages(VideoNode/SeedanceNode) / d.localRefVideos(SeedanceNode) / d.localRefAudios(SeedanceNode) / d.localRefAudio(AudioNode); collectUpstream 合并去重上游与本地素材参与生成", "视觉反馈: target 节点 isAccepting=true 时根 div border-emerald-400 + boxShadow 双层绿色光晕; 幽灵缩略图 accept=true 边框转为 #22c55e", "按下 ESC 取消拖拽", "零破坏: 未点中 data-drag-source 时原有 Ctrl 框选、Ctrl+Shift 多选、右键菜单、节点拖动、Handle 连线、双击编辑、runBus、GroupBox 拖动联动均保持原样"] },
+    "phase16": { "label": "侧边栏节点暂时隐藏(13 个)", "status": "complete", "items": ["NodeMeta 类型新增可选字段 hidden?: boolean,仅控制 UI 入口可见性,不影响 nodeTypes 注册与已存在画布加载渲染", "NODE_GROUPS 各分类 filter 补充 && !n.hidden 过滤隐藏节点", "Canvas.tsx 端口拖出后的候选选择器(candidateMetas) 首行补充 if (meta.hidden) return [] 过滤", "隐藏节点清单(13 个)——特殊节点 5: multi-angle-3d/panorama-720/penguin-portrait/portrait-metadata/storyboard-grid; 工具节点 6: drawing-board/browser/image-compare/frame-extractor/remove-bg/upscale; 辅助节点 2: edit/video-output", "可见节点清单——input(2): upload/output; core(6): text/image/video/seedance/audio/llm; rh(2): runninghub/rh-config; utility(3): resize/combine/grid-crop; auxiliary(3): idea/bp/relay; toolbox(2): cinematic/video-motion —— 合计 18 个可见", "左侧侧边栏、右键画布空白区快添加(QUICK_NODES=input+core)、从 Handle 拖出后出现的能力匹配候选菜单三个入口均不再出现隐藏节点", "需要重新启用某个节点时,只需在 nodeRegistry.ts 对应行删除 hidden: true 即可,零代码改动"] },
+    "phase17": { "label": "RelayNode 全字段透传修复(文本/图像/视频/音频)", "status": "complete", "items": ["问题症状: UploadNode→RelayNode→OutputNode 链路中,上传视频/音频时 RelayNode 显示 '无数据透传' 且 OutputNode 完全无反应", "根因: 原版 RelayNode 仅透传 prompt/imageUrl/urls 三个字段,UploadNode 写入的 videoUrl/audioUrl 被中继节点完全忽略,下游 useNodesData 自然读不到", "字段对齐: UploadNode 按 uploadType 写入 imageUrl/videoUrl/audioUrl; OutputNode 通过 useNodeConnections+useNodesData 订阅上游 prompt/outputText/reply/text + imageUrl/imageUrls/urls/generatedImages + videoUrl + audioUrl", "修复 1 透传范围扩展: RelayNode 收集文本(outputText>reply>prompt>text 优先级,pushUnique 去重)/图像(imageUrl 单 + imageUrls/urls/generatedImages 数组合并)/视频(videoUrl 首个命中)/音频(audioUrl 首个命中) 四类素材,自身 data 同步写出 prompt/imageUrl/imageUrls/urls/videoUrl/audioUrl 让下游一视同仁", "修复 2 死循环防护(对齐 §22.2): upstreamSignature useMemo 拼接所有透传字段,useEffect deps=[upstreamSignature] 避免无 deps 导致 setState 风暴; update() 前做 cur/next JSON 深度比较,只有真变化才写回", "修复 3 零上游主动清理: upstreamIds.length===0 时主动 update 把 prompt/imageUrl/imageUrls/urls/videoUrl/audioUrl 全部置 undefined,避免断开上游后 RelayNode 残留旧素材误导下游", "UI 显示: 节点内增加 📝(文本)/🖼(图)/🎬(视频)/🎵(音频) 四类指示器,无任何素材时显示 '无数据透传'", "零破坏: nodeTypes 注册 / 端口配置 / Sidebar 入口 / 拖出候选 / GroupBox / runBus / 跨节点拖拽 全部保持原样"] },
+    "phase18": { "label": "节点拖出候选菜单 中继节点置顶", "status": "complete", "items": ["从任意节点 Handle 拖出后弹出的 '连接到…' / '从…输入' 候选菜单中,把 relay(中继) 节点永远排在首位", "实现: Canvas.tsx pickerCandidates useMemo 末尾追加 .sort(),仅针对 type==='relay' 的项返回 -1/+1,其余项保持原 NODE_REGISTRY 顺序(稳定排序)", "体验考量: 中继节点是跨距离连线 / 多上游合并 / 下游分发的高频中转点,置顶后一眼可见,减少滚动查找"] },
+    "phase19": { "label": "LLM 多模态 image_url 预处理(修复上游图片透传报错)", "status": "complete", "items": ["问题症状: LLMNode 上游连接上传素材节点后发送报 'get file data from base64:/files/input/up_xxx.png failed: failed to decode base64 data'(convert_request_failed)", "根因: UploadNode 写入的 imageUrl 是本地后端相对路径 /files/input/up_xxx.png,LLMNode 直接放进 image_url.url 透传给上游贞贞工坊 /v1/chat/completions,但上游服务器无法访问本项目本地静态,拿到路径后错误地试图当 base64 解码导致崩溃", "修复: 后端 proxy.js 新增 normalizeLlmMessageImages(messages),在 /llm 路由进入上游前扫描 messages中所有 content 数组里的 image_url.url, /files/* 统一转成 data:image/xxx;base64,xxx dataURL inline; data:/http(s):// 保留原值", "对齐: 严格复用已有的 refToBananaImage helper(line 140-155),思路与 gpt-image-2-web chat 多模态参考图预处理一致", "失败处理: 本地拉 buffer 失败时报 400 '本地图片读取失败: 路径' 明确错误,避免上游误导报错", "零破坏: content 为字符串的普通文本消息不动;外网 http(s) URL 参考图不动;原本就是 data: 的 dataURL 不动;LLMNode 前端代码零修改"] },
+    "phase20": { "label": "图像轮询超时拒 120s → 3600s(GPT2 / nano-banana / nano-banana-pro 标准路径)", "status": "complete", "items": ["问题症状: GPT2 复杂 prompt 或多参考图任务在上游实际还未返图时,前端被 60×2s=120s 提前中断报超时", "修复 1 前端 ImageNode.tsx '原有标准路径' 轮询: maxPoll 60 → 1800,interval 保持 2000ms,上限 1800×2s = 3600s = 60 分钟", "修复 2 后端 proxy.js pollImageTask 默认 maxRetries 60 → 1800,与前端一致,避免 /api/proxy/image 同步代理路径仍 120s 早退", "适用范围: 仅影响 '标准异步任务轮询'(/v1/images/tasks/{tid});MJ / FAL / Seedance / Suno 等独立路径仍使用各自原有超时不变", "零破坏: 任务 status=success/failed 一旦返回仍会立即出循环,不会造成 60 分钟空转;只是上限抬高,正常任务无任何变化"] },
+    "phase21": { "label": "Shift+拖拽剪刀模式 黑色未选中 edge 命中丢失修复", "status": "complete", "items": ["问题症状: 按住 Shift 变剩刀拖拽时,黑色(未选中) edge 无法被剪断,只有粉色(选中/hover) edge 能被剪断", "根因: 原实现仅在每次 mousemove 事件的 当前鼠标点 单点调用 document.elementsFromPoint;鼠标快速拖动时单次事件间距可达 ≥20px,而像素主题黑色 edge stroke 仅 2.5px,鼠标会 'pixel-skip' 完全跳过该 edge", "根因二: 选中/hover 后粉色变粗 且 EdgeLabelRenderer 剩刀按钮区域略大,才造成看似 '只能剪粉色' 的错觉", "修复 1 插值采样命中: onCutMove 里按 上一点 → 当前点 的线段每 4px 一个采样点调用 elementsFromPoint(上限 60 点)，完美涵盖快速拖动间隔", "修复 2 视觉+命中双保险: body.cut-mode 下 .react-flow__edge-path 加宽到 3.5px(原 2.5px),.react-flow__edge-interaction 加宽到 36px(原 24px)", "零破坏: 正常状态 edge 视觉不变、剩刀高亮、轨迹 SVG、DeletableEdge 点击按钮、selected 粉色 均不受影响"] },
+    "phase22": { "label": "LLM 节点 上游图片实时预览与取同源发送", "status": "complete", "items": ["问题症状: LLM 节点 接收上游 image 后 节点内无预览图 用户看不到发送将带什么图", "修复 1: LLMNode 引入 useUpstreamMaterials(id) hook (与 ImageNode/SeedanceNode/RelayNode 同一套机制),订阅上游图片变化实时重渲染", "修复 2: 在 本地图片(多模态) 区上方新增 上游图片 · N 预览栏,静态 40×40 缩略图 + 左上角 ↑ 标记 + 左边绿边框,hover 提示来源节点 id + 完整 url", "修复 3: 取同源 将 collectUpstream 从原手动遍历 edges/nodes 改为走 upstreamMats.images/texts,让 用户预览到什么 = 发送时带上什么,面象双动", "增强覆盖面: 原仅读 imageUrl/image/url + images/imageUrls;现跟随 hook 多读 urls/generatedImages 两个字段,接收范围与 ImageNode 一致", "可拖拽: 预览缩略图与本地选图一样支持 Ctrl+拖出 到其他节点(data-drag-source/kind/url + beginMaterialDrag)", "零破坏: 本地选图(pickedFiles)、会话历史(history)、拖拽接受(handleDrop)、补位 prompt(localPrompt)、文本输入、调用错误出口 全部原状保留"] },
+    "phase23": { "label": "API Key 设置眼睛预览修复 + 7 类分类独立 Key (gpt-image / nano-banana / mj / veo / grok / seedance / suno)", "status": "complete", "items": ["问题症状 1: 打开 API Key 设置弹窗点眼睛无论如何都看不到已存 Key 明文——原 input 受控于用户输入为空且后端只返回脱敏字段时永远呢呢看不到", "修复 1: 新增 GET /api/settings/raw 前端调用 (services/api.ts getRawSettings)，点眼睛 且 input 为空 且 已存 同时成立时 拉一次明文填回 input;同时 useRef 缓存避免重复请求;眼睛拉出明文后不修改则不重复提交(revealed===input 跳过)", "修复 2: ApiSettings 重构 —— 用 inputs/shows Record 统一 10 个 Key 状态;增加弹窗 max-h-[90vh] + overflow-y-auto 防防陈类列表爆高", "需求 2: 新增 7 类分类独立 Key,独立于贞贞工坊通用 Key (gpt-image 系列 / nano-banana 系列 / mj 系列 / veo 系列 / grok 系列 / seedance 系列 / suno 系列)", "后端 settings.js: DEFAULT_SETTINGS 增加 7 个字段 (gptImageApiKey/nanoBananaApiKey/mjApiKey/veoApiKey/grokApiKey/seedanceApiKey/sunoApiKey),GET /api/settings 同步脱敏返回", "后端 proxy.js: 新增 pickApiKey(settings, hint) 按模型名/endpoint/路由名选择分类 key,未填时 fallback 到贞贞通用 Key;新增 applyClassifiedKey(settings, hint) 临时覆盖 settings.zhenzhenApiKey,后续原逻辑零侵入", "后端 router 注入点: /image · /image/submit · /image/status (可传 ?model=) · /image/fal/submit · /image/fal/query · /mj/* (三条,hint='mj') · /video/submit · /video/query · /video/fal/submit · /video/fal/query · /seedance/* (hint='seedance') · /audio/submit · /audio/query (hint='suno')", "前端 ApiSettings 分区展示: 上半区 三套通用 Key (贞贞/RH/LLM);下半区 分类独立 API Key (可选) · 未填时 fallback 提示“未设置 · 使用通用 Key”", "零破坏: 未增加分类 key 的用户 一切如旧;已增加的用户对应模型会优先走分类 key,贞贞通用 Key 仍充当后备"] },
+    "phase24": { "label": "RunningHub AI 应用 全自动 nodeList 拉取 + 媒体输入输出全链路修复 (v1.1.0)", "status": "complete", "items": ["问题症状五连: ①上传视频连上 RH 但提交还是应用默认视频 ②IMAGE 字段预览显示破图 ③同一 webappId 三个 RH 节点提交同一视频结果不一致 ④多产物塞进同一个 OutputNode 未分多节点 ⑤删除 OutputNode 后 RH 节点内才能看见视频", "根因 1: useEffect 同步上游 url 到 paramValues 时 if (!cur?.sourceFromUpstream) continue 跳过未交互字段,undefined 状态上游出现 url 也不会被进一步启用", "根因 2: IMAGE 预览原仅用扩展名正则 /\\.(png|jpe?g|webp|gif|bmp)$/i 判断,RH 内部 fileName 形如 api/xxx.png 也命中导致破图", "根因 3: React state 异步陷阱——用户连上上游后立刻点运行,handleRun 读到的 paramValues 还是旧值(默认 RH hash) → 提交默认 fileName → RH 走应用默认", "根因 4: autoOutput 创建 OutputNode 时面对 N 产物采用 needCount = items.length - existingOutputCount 逻辑,手动连接的无 pickKind OutputNode 会显示全部 → autoOutput 只补建差额", "根因 5额 Canvas autoOutput 提取产物时 d.urls.forEach(pushImg) 全部当图处理,RH 产出的 mp4 被推入 imgs → OutputNode pickKind='image' → 渲染时清空 videos → 0 项空白", "修复 1: useEffect 三态同步 —— sourceFromUpstream === true 持续跟进 / undefined 首次看到上游自动启用 / false 尊重用户取消", "修复 2: IMAGE 预览加 url 前缀白名单(http(s)://、/files/output/、/files/input/、/output/、/input/) + 扩展名 + onError 隐藏兼底", "修复 3: 新增 computeFreshValuesNow(list) 同步快照函数 —— handleRun 进入时重算最新 paramValues 快照后走主提交路径,绕过 React state 异步更新陷阱 + 打[RH/submit] [RH/poll] [RH/done] 完整调试日志", "修复 4: autoOutput 重写为「升级 + 补建」策略 —— 无 pickKind 且仅本节点单一连接的 OutputNode 升级为 pickKind+pickIndex,多上游聚合节点 (totalIncoming>1) 不动;剩余 items 补建为 auto OutputNode —— N 产物 → N 个独立 OutputNode 与其他生成节点对齐", "修复 5: Canvas autoOutput 按扩展名分流 d.urls 到 imgs/vids/auds(.mp4/.webm/.mov/.m4v/.mkv → vids,.mp3/.wav/.ogg/.m4a/.flac/.aac → auds,其他→imgs),主问题「删了 OutputNode 才看见视频」需修复", "修复 6: OutputNode 增加 upstreamSig 字符串签名 deps —— 解决 xyflow useNodesData 引用稳定陷阱 useMemo 不重算问题", "修复 7: 媒体字段拉取 nodeInfoList 后默认勾选「从上游自动获取」(IMAGE/VIDEO/AUDIO),上游未连时 value=''、勾选状态仍为 true,上游连入后同步 useEffect 自动填值", "修复 8: instanceType 输入框改为 select 下拉 [默认(空)/plus],默认不传 instanceType 字段走 RH 默认实例", "修复 9: resolveNodeInfoList 提交前最终兜底 —— 字段值看起来不是 url(可能 RH 默认 hash) + 上游有对应媒体 + sourceFromUpstream !== false → 强制覆盖为上游 url,避免 state 异步/race 导致仍提交默认 hash", "后端 proxy.js /upload-asset 路径白名单补全 4 种前缀 (/files/output/ · /output/ · /files/input/ · /input/),让上传节点产出的 /files/input/up_xxx.mp4 能被解析到 INPUT_DIR", "零破坏保证: 原有手动填 RH fileName + 主动取消从上游获取的用户 — sourceFromUpstream === false 不被任何层覆盖", "sk···规范沉淀: skill.md 章 42 (340行) 记录 RH apiCallDemo schema / fieldType 推断 / 后端 4 接口 / 三层防御 / SUCCESS 分流 / autoOutput 分流 / IMAGE 预览白名单 / instanceType / OutputNode upstreamSig / 调试日志 / 12 项接入 Checklist", "提交链: 38316f2(useEffect 三态 + upstreamSig) → 316b7a5(IMAGE 白名单) → e3e190b(computeFreshValuesNow + 日志) → c5a0ec1(autoOutput 升级+补建) → caae35f(d.urls 分流) → 7e76785(默认勾选) → bfb4f95(instanceType select) → 8e866c4(resolveNodeInfoList 兜底)"] },
+    "phase25": { "label": "默认像素风(light) + RH钱包应用节点 + RH钱包独立 APIKEY (v1.1.x)", "status": "complete", "items": ["主题默认: theme.ts 默认 style='pixel' / mode='light'(zustand persist 仅对清缓存或新用户生效,老用户保留旧值)", "侧栏隐藏 rh-config 节点(hidden:true 仅 UI 隐藏,nodeTypes 注册保留以兼容老画布)", "新增节点 type='runninghub-wallet' (label='RH钱包应用', icon='Wallet', color='violet', category='rh'),与 runninghub 节点共用 RunningHubNode.tsx 组件,通过 NodeProps.type 单点判定 useWallet=type==='runninghub-wallet'", "useWallet 全链路透传: services/generation.ts 4 个 API (submitRh/queryRh/fetchRhAppInfo/uploadRhAsset) 增加 useWallet?:boolean 形参,GET 加 ?wallet=1 query, POST 写进 body", "后端 proxy.js 抽 pickRhApiKey(settings, useWallet) 工具: useWallet→settings.rhWalletApiKey, 否则走原 rhApiKey||runninghubApiKey;4 处 RH 路由(submit/query/upload-asset/app-info)统一用工具 + 友好错误文案『未配置 RH 钱包 APIKEY』", "ApiSettings 在 RunningHub 与 LLM 之间插入新设置项: label『RH 钱包 APIKEY』, bullet bg-violet-400, 提示文案『注意: 本节点用于RH钱包应用,需要设置RH企业级-共享APIKEY』", "stores/apiKeys.ts DEFAULT 加 rhWalletApiKey:''; backend/settings.js DEFAULT_SETTINGS 加 rhWalletApiKey 并 GET /api/settings 同步脱敏返回", "配色: RH钱包应用节点用 violet 主调与默认 cyan RH 节点形成视觉对比, 图标改用 lucide-react Wallet", "零破坏: 未带 useWallet 标志(默认 false)的旧调用走原 rhApiKey 路径完全等价", "提交: bbe3495 feat(rh+theme)"] },
+    "phase27": { "label": "Electron 打包链路 3 处根因修复 (v1.2.1) — bytenode .jsc loader 复刻 + asar 外 .t8c require 兜底 + 后端 config/server 打包模式适配", "status": "complete", "items": ["症状: NSIS 安装后启动失败, 加载窗卡在『启动中...』, dbg.log 报 Cannot find module 'express', require stack 顶为 C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\t8pc-jsc\\xxx.jsc → resources/app.asar/electron/loader.cjs → main.cjs", "根因 1: loader.cjs 的 .t8c hook 把解密后的 V8 字节码写入 Temp\\t8pc-jsc\\<md5>.jsc 后用 require(tmpFile) 二次加载, bytenode 的 .jsc 内置 loader 把 tmpFile 当 fileModule, fileModule.require('express') 从 Temp 路径解析 node_modules 自然找不到 asar 内的 express", "根因 2: .t8c 实际存放在 resources/backend-enc/ (extraResources, asar 外), 其 fileModule.paths 沿 resources/backend-enc/node_modules → resources/node_modules → win-unpacked/node_modules 向上查找均不命中; express 等真正存在于 app.asar/node_modules", "根因 3: backend/src/config.js 完全未识别 T8PC_PACKAGED / T8PC_USER_DATA / T8PC_FRONTEND_DIST 三个环境变量, 数据写到只读区且 NODE_ENV 仍是 development; 同时 server.js 完全未注册前端静态托管, GET / 返回 'Cannot GET /'", "修复 1 (electron/loader.cjs): 重写 .t8c require hook, 完整复刻 bytenode 的 .jsc 加载逻辑 (generateScript + fixBytecode + readSourceHash 按 Node 版本动态拷贝 dummy 字节码 flag 区) → 用 vm.Script + cachedData 直接在原始 .t8c fileModule 上下文 runInThisContext + 手动 apply CommonJS wrapper [fileModule.exports, req, fileModule, filename, dirname, process, global], 完全跳过 tmpFile 二次 require", "修复 2 (electron/loader.cjs): 自定义 req(id) 包装 fileModule.require, 捕获 MODULE_NOT_FOUND 时回退到 loader.cjs 自身 require (loader.cjs 在 app.asar 内, 可解析 app.asar/node_modules/express|cors|multer|sharp); req.resolve 同步加同等兜底", "修复 3 (backend/src/config.js): 整文件重写, 引入 IS_PACKAGED = process.env.T8PC_PACKAGED === '1', DATA_ROOT = IS_PACKAGED ? T8PC_USER_DATA : PROJECT_DIR; 所有目录 BASE_DIR/DATA_DIR/INPUT_DIR/OUTPUT_DIR/THUMBNAILS_DIR + 三个 *_FILE 全部从 DATA_ROOT 派生; FRONTEND_DIST 优先读 T8PC_FRONTEND_DIST 否则 IS_PACKAGED ? '' : project/dist; NODE_ENV 在打包模式默认 production; 打包模式启动时 fs.mkdirSync(recursive) 自动建 4 个数据目录避免首次 ENOENT", "修复 4 (backend/src/server.js): 在 app.use('/api/image', imageOpsRouter) 之后 / 启动 listen 之前插入 if (config.IS_PACKAGED && config.FRONTEND_DIST && fs.existsSync(config.FRONTEND_DIST)) { app.use(express.static(config.FRONTEND_DIST)); app.get(/^\\/(?!api\\/|files\\/|input\\/|output\\/).*/, ...sendFile index.html) } — express.static 优先于 SPA 兑底, 兑底排除 api/files/input/output 4 个前缀避免吞掉接口", "修复 5 (electron/main.cjs): 把窗口标题 + log 窗口 + IPC info 三处版本号 v1.1.0 → v1.2.0 同步 package.json (后续永久规则: package.json bump 后必须同步检查 main.cjs)", "修复 6 (electron/_post_build.cjs): 已确认存在, 验证 7 个 .t8c 必存 + frontend/{index.html,assets} 必存 + 强制清除意外混入的 resources/{app,backend}/src 明文目录", "实测验证日志 (启动 dist_electron/win-unpacked/T8-PenguinCanvas.exe 完整成功证据): [backend] started in-process on http://127.0.0.1:18766 → 环境: production → 数据目录: C:\\Users\\Administrator\\AppData\\Roaming\\t8-penguin-canvas\\data → GET / 200 → GET /assets/index-*.js → GET /api/canvas → GET /api/settings → 窗口标题: 贞贞的无限画布（企鹅共创版）", "最终产物: dist_electron/T8-PenguinCanvas-Setup-1.2.0.exe (NSIS, 87.18 MB)", "沉淀: skill.md §47 完整记录 3 处根因 + 4 步修复 + 标准化打包 SOP + 6 项打包前必检 checklist + 调试技巧表, 作为下次打包唯一参考依据"] },
+    "phase26": { "label": "RH LIST 字段识别 + 多素材协议约束修复 + 日志总线统一 + 像素风字模糊全局解 + ResizeNode 体验修正 (v1.2.0)", "status": "complete", "items": ["RH LIST/SELECT/DROPDOWN/COMBO/ENUM 字段识别: extractFieldOptions 按 fieldData/options/list/values/enum/choices/items/selectOptions/dropdown 9 种候选 + [{label,value}]/[{name,value}] 对象数组解构 + fieldType=LIST 时 fieldValue 本身是数组的兜底", "KNOWN_FIELD_OPTIONS 词典兜底(commit 2d633a3): 当 RH apiCallDemo 实际返回 fieldType=TEXT 但参数名属于已知枚举(aspectRatio/aspect_ratio/ratio/resolution/size/mode/quality/instanceType/precision/scheduler/sampler) 时按词典生成下拉,fieldName 大小写不敏感", "extractDefaultValue 与 extractFieldOptions 配套,选项首项作默认值,避免 LIST 字段被当 string 提交", "字段头紧凑布局: 三段(fieldName / 类型徽标 / #nodeId) 改 gap-1 + 竖线分隔,避免大间距视觉割裂", "RH 多素材协议约束(commit 5dde07f → 98f2005 hotfix): RH nodeInfoList fieldValue 必须单 fileName,多行/逗号拼接会触发 'Custom validation failed for node' → 撤回多行拼接尝试,resolveNodeInfoList 加 strip multiline 兜底;协议层多图能力需依赖 webapp 模板内部多个 image 字段(单字段无法塞 N 张)", "RunningHubNode 接入 logBus(commit 4ae4570): import { logBus } from '../../stores/logs', src=`${useWallet?'rh-wallet':'rh'}:${id}`,9 处关键事件(fetchInfo info / submit info+success / poll每30s debug / done success / failed error / 轮询出错 warn / stop warn / override debug / strip multiline warn) 同步发到日志面板,修复『日志面板暂无日志』", "像素风字模糊全局解(commit 4ae4570): theme-pixel.css 增加 html[data-theme-style='pixel'] .react-flow__node * { backdrop-filter:none !important; -webkit-backdrop-filter:none !important } 全局兜底所有节点 inline blur,一次修复 18+ 节点;RunningHubNode/RhConfigNode 容器再按 isPixel 切换 var(--px-surface) 不透明背景双层防御", "ResizeNode 体验修正(commit 0f55c8d): 默认 fit 从 inside 改为 cover(sharp inside 是『等比缩放不超 W×H 不裁剪』,9:16 → 1024×1024 inside ≈ 576×1024 仍是 9:16 看似没变,违反『尺寸调整』直觉);FIT_OPTIONS 加中文 label[cover·裁剪铺满 / contain·包含留白 / inside·不超尺寸不裁剪 / fill·拉伸可变形];老存档 d?.fit==='inside' 仍保留", "ImageOpFrame 引入 useHasAutoOutput(id) hook(commit 0f55c8d): 下游连有 type==='output' 节点时不渲染 outImg/outUrls 内部预览,避免双显;影响范围 Resize/Upscale/Crop/GridCrop/Combine/RemoveBg 全部 ImageOpFrame 派生节点", "提交链: 4326319(LIST 识别) → 64b4ffa(多图素材) → 5dde07f(多行拼接 - 撤回) → 98f2005(hotfix 撤回) → 2d633a3(词典+紧凑) → 4ae4570(logBus+全局禁用 blur) → 0f55c8d(ResizeNode fit cover + 隐藏内部预览)"] },
+    "phase28": { "label": "SHIFT 多线平移到目标节点失效修复 (Canvas bulkReconnect phantom pointerEvents:none + elementsFromPoint 兜底)", "status": "complete", "items": ["现象: 多条连线按住 SHIFT 平移到其他节点失效 (Seedance2.0 完整连线集平移到另个 Seedance2.0 无反应)", "根因: phantom wrapper DOM 在 mouseup 瞬间盖在目标 handle 之上 (zIndex:9999 最高层 + xyflow .react-flow__node wrapper 随鼠标),导致 event.target.closest('.react-flow__handle') = null → 直接走 restoreOriginal 平移失效", "修复 A: phantom 节点加 style: { pointerEvents: 'none' } — 让 wrapper DOM 不响应鼠标事件,事件完整穿透到下层目标 handle", "修复 B: 新增 findHandleAt(cx, cy) 工具函数 — 用 document.elementsFromPoint(复数) 遍历坐标下命中所有元素,主动跳过 BULK_PHANTOM_ID 节点自身", "修复 C: 重写 onMouseUp 双层路径 — 先试 event.target 快路径，命中 phantom 时用 findHandleAt 兜底（A 失效时 B 仍能拾回 handle，双重保险）", "修复 D: onMouseMove 同步使用 findHandleAt 让 hover 高亮也跳过 phantom", "兼容性: 单线重连/SHIFT 拉新连线/SHIFT 剪刀/Alt 拖克隆/ESC 取消 全部未受影响; phantom 节点自身的边渲染 (SVG 层) 不受 wrapper pointerEvents 影响", "验收: SHIFT+多边起点 mousedown → phantom 出现,mousemove 高亮同方向 handle,mouseup 落在目标 handle → 边批量重连成功", "关键文件: src/components/Canvas.tsx (~1577 phantom style / ~1657 findHandleAt / ~1701 onMouseUp 双层)", "沉淀: skill.md §48 完整记录机制+根因+4 处修复+设计要点+验收清单"] },
+    "phase29": { "label": "终端日志『暂无日志』反复失效修复 + 防再丢失规范 + Git rebase 灾难抢救", "status": "complete", "items": ["问题历史: 此问题出现两次 — 首次修复 commit 4ae4570 (RH 接入 logBus)\uff0c后被 d5430c2 灾难 rebase 连同 14833fa~295c700 累积良好内容 (RH 钱包节点/独立 APIKEY/v1.2.x 版本号/LICENSE/素材资源标题) 一同回退", "抢救动作: git tag backup-d449552-before-recovery 备份 → git reset --hard 295c700 回到健康点 → 重做 SHIFT 修复 + skill.md/features.json 文档 → force-with-lease push", "根因定位: useLogStore / TerminalPanel / logBus 三件套始终正常;问题只会出在『业务节点是否调用 logBus.xxx()』这一环,RH 节点重构频繁容易丢失", "三道防线 A: 顶部 import { logBus } 上方加 ⚠️ 警告注释,明确告知后续重构者不能删除", "三道防线 B: 9 个必设调用点表 (字段覆写 debug / submit info / taskId success / submit error / poll 进度 debug / done success / FAILED error / 轮询 catch warn / 用户停止 warn) — 代码与 skill.md §49.3 对齐", "三道防线 C: src 命名空间约定 `<ns>:${id}` (rh / audio / image / seedance / llm / ...),函数体顶端 const src 正上方加 ⚠️ 警告注释", "反重构检查表: 顶部 import / src / 9 调用点 / console+logBus 同行 / tsc 0 错误 / 手动验证面板计数 — 6 项必跑,与 skill.md §49.4 对齐", "经验教训: 永远不要随意 git pull --rebase 解决冲突;有冲突优先 merge 或新建分支;大量功能丢失时立即 git reflog 抢救;每次 push 前 git diff --stat <upstream> HEAD 检查 deletions/insertions 比例", "关键文件: src/stores/logs.ts (不需改) / src/components/TerminalPanel.tsx (不需改) / src/components/nodes/RunningHubNode.tsx ⚠️高重构频繁区域", "沉淀: skill.md §49 完整记录问题历史/架构图/三道防线/反重构检查表/经验教训,作为业务节点重构唯一参考"] },
+    "phase30": { "label": "Suno 双轨节点输出素材只显示 1 首歌修复 (OutputNode + Canvas autoOutput 双路径补 audioUrl_1)", "status": "complete", "items": ["现象: SunoNode 右侧有两个 source handle (audio-0/audio-1, top 48%/52%) 输出两首歌,但边连到下游 OutputNode 后只显示『音频 (1)』", "根因: SunoNode (=AudioNode) 将两首歌分别写入 data.audioUrl 和 data.audioUrl_1,但 OutputNode 的 collected/upstreamSig/下游透传三处以及 Canvas.tsx autoOutput 都只读主轨 audioUrl,遗漏副轨 audioUrl_1", "差别说明: useUpstreamMaterials 业务节点 hook 已在 phase24/26 修复读双字段,所以 LLMNode/SeedanceNode 作下游能拿到两首;本次仅是展示链路遗漏", "修复 1 (OutputNode.tsx upstreamSig): 第 88 行下加 ud.audioUrl_1 字段签名,避免 useMemo 由于签名未变而不重算", "修复 2 (OutputNode.tsx collected): 第 158 行下加 pushUnique(out.audios, ud.audioUrl_1),双轨同时进入 collected.audios", "修复 3 (OutputNode.tsx 下游透传 effect): next/cur/changed 同步加 audioUrl_1: collected.audios[1] || '',避免多个 OutputNode 串联场景副轨丢失", "修复 4 (Canvas.tsx autoOutput 第 1937 行后): pushAud(d.audioUrl_1),让 items 数组多出 1 项 audio → autoOutput 自动补建第 2 个 OutputNode 并标 pickKind='audio'/pickIndex=1", "向后兼容: 单轨节点(语音合成等)只写 audioUrl,audioUrl_1 为 undefined → pushUnique/pushAud 会因 typeof !== 'string' 跳过,不影响", "验收: SunoNode 生成后 → 连 OutputNode 显示『音频 (2)』两个播放器; autoOutput 场景 → 自动创建 2 个独立 OutputNode 各含一首", "关键文件: src/components/nodes/OutputNode.tsx (4 处签名/collected/透传) / src/components/Canvas.tsx (1937 行 autoOutput)", "沉淀: skill.md §50 完整记录用户反馈/根因/4 处修复/设计要点/反重构检查表/经验教训"] },
+    "phase31": { "label": "节点内 textarea/input/select 框选文字时整个节点跟着鼠标走的修复 (App.tsx 全局 MutationObserver 加 nodrag/nowheel)", "status": "complete", "items": ["现象: TextNode/LLMNode/AudioNode 等节点内 textarea 按住鼠标拖动框选文字时,整个节点跟着鼠标走(节点拖动了)而不是选中文字", "根因: xyflow v12 节点拖动是通过 pointerdown 识别启动,传统 onMouseDown stopPropagation 拦不住 pointerdown(后者更早触发);官方机制是添加 `nodrag` className,xyflow 检测后不拦截", "项目现状: 14 个 textarea 分散在 12 个节点文件(TextNode/AudioNode/ImageNode/LLMNode×3/StoryboardGridNode/PresetImageNode/OutputNode/RunningHubNode/RhConfigNode/SeedanceNode/VideoNode/IdeaNode),逐个补 className 不可维护", "修复 (1 处全局处理): App.tsx 复用原有的全局 MutationObserver (原本仅用于 spellcheck=false),扩展为同时为所有 textarea/input/select 调 el.classList.add('nodrag', 'nowheel')", "querySelectorAll 扫描从 'textarea, input' 改为 'textarea, input, select' (SELECT 不设 spellcheck 但同样加 nodrag/nowheel)", "优点: 1)零侵入(classList.add 仅追加,保留原 className 和样式) 2)未来新增节点自动覆盖 3)复用现有 useEffect/MutationObserver,零额外性能损耗", "覆盖范围(修复后均正常): 文字框选/双击选词/三击选行/复制粘贴/textarea 内部滚轮滚动 → 节点不动", "不受影响: 节点头部/边框拖动节点仍正常 / Ctrl+拖画布框选多节点未受影响 / Sidebar 等非 ReactFlow 区域的 input 加 nodrag 无副作用", "关键文件: src/App.tsx (仅 1 个 useEffect 修改)", "验收: tsc 0 错误; TextNode 节点内 textarea 框选 [verse 1] 歌词 → 节点不动,文字高亮选中正常", "沉淀: skill.md §51 完整记录用户反馈/根因/1 处修复/为什么走全局/覆盖范围/反重构检查表/经验教训"] },
+    "phase32": { "label": "节点四角同比例缩放 + width:100% 百分比循环导致连线/缩放失效修复 (TextNode/OutputNode/UploadNode)", "status": "complete", "items": ["需求: TextNode/OutputNode/UploadNode 三个节点支持拖 4 角同比例缩放 + 鼠标悬停明显感知 UI + 主题适配(科技风×像素风 × 深色×浅色 = 4 套视觉)", "新建控件 src/components/nodes/ResizableCorners.tsx (80 行): 4 个 NodeResizeControl 划到 4 角,keepAspectRatio 全 true,仅 selected=true 时渲染", "src/styles/index.css 末尾追加 ~130 行 CSS: 4 套主题 .t8-resize-handle--{tech|pixel}-{dark|light} + hover 高亮(opacity 0.5→0.85→1 + scale 1.18 + accent 光晕) + 像素风 4 角硬阴影方向自动朝外", "初版邀请 Bug: root 用 width:'100%' + minHeight:'100%' 后用户反馈 上传节点无法连接下游 + 输出节点只能纵向拉大(keepAspectRatio 完全失效)", "根因: ReactFlow v12 节点 wrapper(.react-flow__node) absolute 定位 + 默认 width=auto 与 root width:100% 形成 CSS 百分比循环测量,浏览器 fallback 时 wrapper.measured.width 可能是 0", "连线失效机制: handleBounds 依赖 measured → measured.width≈0 → Handle 位置错位 → 鼠标点不到 → 无法连接", "纵长条机制: xyflow XYResizer onResizeStart 计算 aspectRatio = measured.width/measured.height = 0/h = 0 → 拖角时 distX = distY*0 = 0 → newWidth 始终 clamp 到 minWidth → 只能纵向拉 + 下方空白", "最终修复方案(本地 state 持有具体 px): 节点内部 useState({w: 初始 px, h: undefined}) + root style 读 size.w/size.h + ResizableCorners onResize 同步 setSize → root 始终有具体 px → wrapper measured 准确 → handleBounds 正确 + keepAspectRatio 正确", "各节点参数: TextNode {w:260, minWidth:220, minHeight:140, accent:#38bdf8 sky-400} / OutputNode {w:320, minWidth:260, minHeight:160, accent:teal-300} / UploadNode {w:260, minWidth:220, minHeight:180, accent:跟随上传类型端口色}", "内层 flex-1 条件化: 默认 root height=auto 时 flex-1 fallback 0 会导致内层缩塌 → 改为 `${size.h ? 'flex-1 min-h-0 overflow-auto' : ''}` size.h 未设时内层 block 跟随内容自然高,拖过后才启用 flex-1 撑满", "各主题表现: 科技风 圆角小方块+accent 色描边, hover 填充 accent 色 + color-mix 光晕; 像素风 黑描边+糖果色+2px 硬阴影(neo-brutalism), 4 角硬阴影方向自动朝外", "零破坏: 未选中时 ResizableCorners 不渲染 → 节点视图保持纯净; 拖动原有未动过的节点仍是初始默认 px,与之前 w-[260px]/width:320 等价", "关键文件: src/components/nodes/ResizableCorners.tsx(新增) / src/styles/index.css(+~130 行 CSS) / TextNode.tsx + OutputNode.tsx + UploadNode.tsx (root style + size state + onResize)", "验收: tsc 0 错误; 三个节点选中时 4 角出现主题适配 handle; 拖右下角 宽高同时同比例变化; 上传节点 source handle 可点击发起连线", "沉淀: skill.md §52 完整记录 需求/初版问题/用户反馈/根因(CSS 百分比循环)/最终修复/各节点参数/ResizableCorners 设计/反重构检查表/经验教训 9 节"] }
+  },
+  "categories": {
+    "input": {
+      "label": "输出素材",
+      "count": 2,
+      "nodes": [
+        { "type": "upload", "label": "上传素材节点", "description": "图像 / 视频 / 音频 三合一上传(选型后输出端口自适应染色 + 只能连到同类型入口)" },
+        { "type": "output", "label": "输出素材节点", "description": "终端预览节点：自动收集上游任意节点的 文本/图像/视频/音频，图像视频按原始宽高比显示(object-contain)，文本双击进入可编辑状态(Ctrl+Enter 保存 / Esc 取消 / “恢复”返回 live)" }
+      ]
+    },
+    "core": {
+      "label": "核心节点",
+      "count": 6,
+      "nodes": [
+        { "type": "text", "label": "文本节点", "description": "提示词文本" },
+        { "type": "image", "label": "图像生成节点(ZhenzhenMagic)", "description": "多 TAB 模型切换:GPT Image 2 / Nano Banana Pro / Nano Banana 2 / Midjourney(MJ 无 FAL,属 Comfly 渠道),对应主项目 gpt-image-2-web Tab 0/1/2 + runMJ" },
+        { "type": "video", "label": "视频节点", "description": "veo-3.1 / grok-video" },
+        { "type": "seedance", "label": "SD2.0 节点", "description": "Seedance 2.0 视频分镜" },
+        { "type": "audio", "label": "音频节点", "description": "Suno 全对齐 gpt-image-2-web:三模式(generate/cover/extend) + 7 版本(v3.0/v3.5/v4/v4.5/v4.5+/v5/v5.5) + 本地上传 + 上游 audioUrl 兜底,无 FAL" },
+        { "type": "llm", "label": "LLM/Vision 节点", "description": "完全对齐 gpt-image-2-web chat:5 模型(gemini-3.1-flash-lite 默认/gpt-4o/gemini-3.1-pro/gpt-5/gpt-image-2-all) + temp/max_tokens + system 预设 + 多模态图片 + 多轮会话 + SSE 流式 + 独立 LLM Key" }
+      ]
+    },
+    "rh": {
+      "label": "RH 节点",
+      "count": 3,
+      "nodes": [
+        { "type": "runninghub", "label": "RunningHub 节点", "description": "RH 工作流主节点(webappId 搜索拉 nodeInfoList 自动展开为表单 + LIST/SELECT 自动识别 + KNOWN_FIELD_OPTIONS 词典兜底 + 媒体上游同步 + computeFreshValuesNow 同步快照 + resolveNodeInfoList 三层防御 + autoOutput 多产物分多 OutputNode + 接入 logBus 日志面板)" },
+        { "type": "runninghub-wallet", "label": "RH钱包应用", "description": "v1.1.x 新增,与 runninghub 共用 RunningHubNode.tsx,通过 NodeProps.type 单点判定 useWallet=true,4 个 RH 调用全部走独立 rhWalletApiKey(企业级共享 APIKEY),violet 主调 + Wallet 图标" },
+        { "type": "rh-config", "label": "RH 配置", "description": "RunningHub 工作流参数注入(v1.1.x 起 hidden:true 仅从 Sidebar 隐藏,nodeTypes 注册保留以兼容老画布)", "hidden": true }
+      ]
+    },
+    "special": {
+      "label": "特殊节点",
+      "count": 5,
+      "nodes": [
+        { "type": "multi-angle-3d", "label": "多角度 3D", "description": "3D 多视角生成" },
+        { "type": "panorama-720", "label": "720 全景", "description": "720° 全景图生成" },
+        { "type": "penguin-portrait", "label": "企鹅肖像", "description": "肖像专用流程" },
+        { "type": "portrait-metadata", "label": "肖像元数据", "description": "肖像参数管理" },
+        { "type": "storyboard-grid", "label": "分镜网格", "description": "分镜九宫格布局" }
+      ]
+    },
+    "utility": {
+      "label": "工具节点",
+      "count": 9,
+      "nodes": [
+        { "type": "drawing-board", "label": "画板", "description": "手绘 / 涂抹", "hidden": true },
+        { "type": "browser", "label": "浏览器", "description": "网页内嵌", "hidden": true },
+        { "type": "image-compare", "label": "图片对比", "description": "前后对比", "hidden": true },
+        { "type": "frame-extractor", "label": "抽帧", "description": "视频抽帧", "hidden": true },
+        { "type": "resize", "label": "尺寸调整", "description": "图像尺寸调整(v1.2.0 起默认 fit=cover 裁剪铺满,FIT_OPTIONS 4 选项带中文说明 cover/contain/inside/fill;ImageOpFrame 派生节点下游连 OutputNode 时自动隐藏内部预览避免双显)" },
+        { "type": "combine", "label": "合并", "description": "图像合并" },
+        { "type": "remove-bg", "label": "抠图", "description": "去除背景", "hidden": true },
+        { "type": "upscale", "label": "放大", "description": "图像放大", "hidden": true },
+        { "type": "grid-crop", "label": "九宫格", "description": "网格切图" }
+      ]
+    },
+    "auxiliary": {
+      "label": "辅助节点",
+      "count": 4,
+      "nodes": [
+        { "type": "edit", "label": "编辑节点", "description": "图像编辑/局部" },
+        { "type": "idea", "label": "灵感节点", "description": "灵感记录" },
+        { "type": "bp", "label": "BP 节点", "description": "Blueprint 蓝图" },
+        { "type": "relay", "label": "中继节点", "description": "数据中转" },
+        { "type": "video-output", "label": "视频输出", "description": "视频结果展示" }
+      ]
+    },
+    "toolbox": {
+      "label": "工具箱",
+      "count": 2,
+      "nodes": [
+        { "type": "cinematic", "label": "电影感工具箱", "description": "影视化效果" },
+        { "type": "video-motion", "label": "视频运镜工具箱", "description": "运镜参数" }
+      ]
+    }
+  },
+  "portTypes": {
+    "description": "节点端口语义类型定义 ⏱ src/config/portTypes.ts 。所有连接都需严格匹配 source.outputs 与 target.inputs 的交集;'any' 透传仅限 relay 节点使用。",
+    "types": ["text", "image", "video", "audio", "metadata", "config", "any"],
+    "colorMapping": {
+      "text": "#7dd3fc",
+      "image": "#fcd34d",
+      "video": "#fda4af",
+      "audio": "#c4b5fd",
+      "metadata": "#67e8f9",
+      "config": "#a5b4fc",
+      "any": "#cbd5e1"
+    },
+    "validation": {
+      "runtime": "ReactFlow isValidConnection (Canvas.tsx onIsValidConnection)",
+      "core": "isConnectionValid(src, tgt) ⏱ src.outputs ∩ tgt.inputs ≠ ∅",
+      "selfLoop": "禁止 source.id === target.id",
+      "uploadDynamic": "upload 节点输出以 data.uploadType 动态决定(image/video/audio),未选型时输出为空,任何连接均被拒绝。"
+    }
+  },
+  "removed": {
+    "description": "以下节点在重构中被明确移除,不可再加入",
+    "nodes": [
+      { "type": "rh-magic", "reason": "企鹅云 magic 流程已移除" },
+      { "type": "rh-video-s", "reason": "RH 视频特化流程已移除" },
+      { "type": "rh-character-extract", "reason": "RH 角色提取已移除" },
+      { "type": "comic-config", "reason": "漫剧流程已移除" }
+    ]
+  },
+  "modelRegistry": {
+    "image": [
+      { "id": "gpt-image-2", "label": "GPT Image 2", "provider": "zhenzhen", "endpoint": "/v1/images/generations" },
+      { "id": "gpt-image-2-fal", "label": "GPT Image 2 (FAL)", "provider": "zhenzhen-fal", "endpoint": "/fal/openai/gpt-image-2[/edit]", "paramKind": "gpt-fal", "maxRefs": 5 },
+      { "id": "nano-banana-2", "label": "Nano Banana 2", "provider": "zhenzhen", "endpoint": "/v1/images/generations" },
+      { "id": "nano-banana-2-fal", "label": "Nano Banana 2 (FAL)", "provider": "zhenzhen-fal", "endpoint": "/fal/fal-ai/nano-banana-pro/edit", "paramKind": "nbpro-fal", "maxRefs": 8 },
+      { "id": "nano-banana-pro", "label": "Nano Banana Pro", "provider": "zhenzhen", "endpoint": "/v1/images/generations" },
+      { "id": "nano-banana-pro-fal", "label": "Nano Banana Pro (FAL)", "provider": "zhenzhen-fal", "endpoint": "/fal/fal-ai/nano-banana-pro/edit", "paramKind": "nbpro-fal", "maxRefs": 8 },
+      { "id": "midjourney", "label": "Midjourney(Comfly)", "provider": "zhenzhen", "endpoint": "/{mj-turbo|mj-fast|mj-relax}/mj/submit/imagine", "paramKind": "mj", "versions": ["v 8.1","v 8","v 7","v 6.1","v 6.0","v 5.2","v 5.1","niji 7","niji 6","niji 5","niji 4"], "ratios": ["1:1","4:3","3:2","16:9","3:4","2:3","9:16"], "speeds": ["fast","turbo","relax"], "refs": { "main": "base64Array(多张)", "sref": "≤2张上传换URL", "oref": "≤2张上传换URL" }, "note": "严格对齐 gpt-image-2-web runMJ;无 FAL 渠道" }
+    ],
+    "video": [
+      { "id": "veo-3.1", "label": "Veo 3.1", "provider": "zhenzhen", "endpoint": "/v1/videos/generations" },
+      { "id": "grok-video", "label": "Grok Video", "provider": "zhenzhen", "endpoint": "/v1/videos/generations" },
+      { "id": "seedance-2.0", "label": "Seedance 2.0(SD2.0)", "provider": "zhenzhen", "endpoint": "/v1/videos/seedance" }
+    ],
+    "audio": [
+      { "id": "suno-generate", "label": "Suno 生成", "provider": "zhenzhen", "endpoint": "/suno/generate", "versions": ["v3.0","v3.5","v4","v4.5","v4.5+","v5","v5.5"] },
+      { "id": "suno-cover", "label": "Suno 翻唱", "provider": "zhenzhen", "endpoint": "/suno/submit/music", "versions": ["v3.0","v3.5","v4","v4.5","v4.5+","v5","v5.5"] },
+      { "id": "suno-extend", "label": "Suno 续写", "provider": "zhenzhen", "endpoint": "/suno/generate", "versions": ["v3.0","v3.5","v4","v4.5","v4.5+","v5","v5.5"] }
+    ],
+    "llm": [
+      { "id": "gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite (默认)", "provider": "llm-direct", "endpoint": "/v1/chat/completions", "vision": true, "stream": true },
+      { "id": "gpt-4o", "label": "GPT-4o", "provider": "llm-direct", "endpoint": "/v1/chat/completions", "vision": true, "stream": true },
+      { "id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro", "provider": "llm-direct", "endpoint": "/v1/chat/completions", "vision": true, "stream": true },
+      { "id": "gpt-5", "label": "GPT-5", "provider": "llm-direct", "endpoint": "/v1/chat/completions", "vision": true, "stream": true },
+      { "id": "gpt-image-2-all", "label": "GPT Image 2 All (图文)", "provider": "llm-direct", "endpoint": "/v1/chat/completions", "vision": true, "imageOutput": true, "stream": false }
+    ]
+  },
+  "apiKeys": {
+    "zhenzhen": {
+      "label": "贞贞工坊 API Key",
+      "baseUrl": "https://ai.t8star.org",
+      "fixed": true,
+      "scope": ["image", "video", "audio"],
+      "role": "全局后备 Key, 任何分类 key 留空时 fallback 到此"
+    },
+    "runninghub": {
+      "label": "RunningHub API Key",
+      "baseUrl": "https://www.runninghub.cn",
+      "fixed": false,
+      "scope": ["runninghub", "rh-config"]
+    },
+    "runninghubWallet": {
+      "label": "RH 钱包 APIKEY",
+      "baseUrl": "https://www.runninghub.cn",
+      "fixed": false,
+      "scope": ["runninghub-wallet"],
+      "backendField": "rhWalletApiKey",
+      "note": "v1.1.x 新增独立 Key,仅用于 RH钱包应用节点(RH 企业级共享 APIKEY);后端 pickRhApiKey(settings, useWallet) 根据 useWallet 标志选 key,未配置时报专属错误不 fallback rhApiKey 避免漏费频道"
+    },
+    "llm": {
+      "label": "LLM 独立 API Key",
+      "baseUrl": "https://ai.t8star.org",
+      "fixed": true,
+      "scope": ["llm", "vision"],
+      "note": "额度隔离,base URL 与贞贞工坊一致但 Key 独立"
+    },
+    "classified": {
+      "description": "分类独立 Key (phase23): 后端 pickApiKey 按模型名/endpoint/路由名路由;未填时自动 fallback 到 zhenzhenApiKey",
+      "keys": {
+        "gptImageApiKey": { "label": "gpt-image 系列", "matches": ["gpt-image", "gpt2", "gpt_image"] },
+        "nanoBananaApiKey": { "label": "nano-banana 系列", "matches": ["nano-banana", "nano_banana"] },
+        "mjApiKey": { "label": "mj 系列", "matches": ["midjourney", "mj-fast", "mj-turbo", "mj-relax"] },
+        "veoApiKey": { "label": "veo 系列", "matches": ["veo"] },
+        "grokApiKey": { "label": "grok 系列", "matches": ["grok"] },
+        "seedanceApiKey": { "label": "seedance 系列", "matches": ["seedance"] },
+        "sunoApiKey": { "label": "suno 系列", "matches": ["suno", "chirp"] }
+      }
+    }
+  },
+  "backendRoutes": {
+    "baseUrl": "http://127.0.0.1:18766",
+    "prefix": "/api",
+    "groups": {
+      "status": ["GET /api/status — 健康检查"],
+      "canvas": [
+        "GET /api/canvas — 列出画布",
+        "POST /api/canvas — 创建画布",
+        "GET /api/canvas/:id — 读取画布数据",
+        "PUT /api/canvas/:id — 保存画布数据(防空覆盖)",
+        "DELETE /api/canvas/:id — 删除画布",
+        "PATCH /api/canvas/:id/name — 重命名"
+      ],
+      "settings": [
+        "GET /api/settings — 三套 Key 设置(脱敏)",
+        "GET /api/settings/raw — 内部明文(代理调用使用)",
+        "POST /api/settings — 更新设置"
+      ],
+      "files": [
+        "POST /api/files/upload — 文件上传",
+        "GET /api/files/list — 列出 output 媒体",
+        "POST /api/files/upload-base64 — base64 dataURL 转存"
+      ],
+      "image": [
+        "POST /api/image/resize — sharp 尺寸调整",
+        "POST /api/image/upscale — lanczos3 放大",
+        "POST /api/image/grid-crop — 九宫格切图",
+        "POST /api/image/combine — 横/纵向拼接",
+        "POST /api/image/remove-bg — 抠图(占位)"
+      ],
+      "proxy": [
+        "POST /api/proxy/image — 图像生成(贞贞工坊,自动转存)",
+        "POST /api/proxy/image/fal/submit — FAL Queue 提交(gpt-image-2-fal / nano-banana-pro-fal,同步返 images[] 或异步返 requestId+responseUrl)",
+        "GET /api/proxy/image/fal/query?requestId&endpoint&responseUrl — FAL 任务轮询(HTTP 非200 时 IN_QUEUE/IN_PROGRESS 视为 pending,完成 images[] 转存)",
+        "POST /api/proxy/llm — LLM Chat(独立 Key, 支持 stream:true SSE 透传, content 支持多模态 text+image_url 数组, temperature 0~2, max_tokens 100~128000)",
+        "POST /api/proxy/mj/imagine — Midjourney imagine(speed_map: turbo/fast/relax → mj-turbo/mj-fast/mj-relax;payload 严格对齐 runMJ:base64Array+prompt+remix+ar/no/c/s/iw/sw/cw/sv/seed)",
+        "GET /api/proxy/mj/task/:id?speed= — Midjourney 轮询(URL 中 ai.comfly.chat 重写为 ai.t8star.cn);code===1 成功、status==='SUCCESS' 取 image_url(主图)+image_urls(JSON string 解析为 4 张)",
+        "POST /api/proxy/mj/upload — Midjourney sref/oref 参考图上传(上游 mj/submit/upload-discord-images,返 result[0]/result 作为 URL)",
+        "POST /api/proxy/video/submit — 视频任务提交",
+        "GET /api/proxy/video/query?taskId — 视频任务轮询(转存)",
+        "POST /api/proxy/audio/submit — Suno 提交(generate/cover/extend, 7 版本 MV 映射)",
+        "GET /api/proxy/audio/query?clipIds&saveLocal — Suno 轮询(saveLocal=true 时转存到本地, tracks 含 clipId+remoteUrl+audioUrl)",
+        "POST /api/proxy/audio/upload — Suno 本地音频上传(multer + 5 步上传链 init→S3→finish→轮询→initialize-clip, 返回 clipId)",
+        "POST /api/proxy/runninghub/submit — RH 工作流提交(body.useWallet=true 时走 rhWalletApiKey)",
+        "GET /api/proxy/runninghub/query?taskId&wallet=1 — RH 任务轮询(转存;wallet=1 走 rhWalletApiKey)",
+        "GET /api/proxy/runninghub/app-info?webappId&wallet=1 — RH 应用信息(wallet=1 走 rhWalletApiKey)",
+        "POST /api/proxy/runninghub/upload-asset — RH 上传资源(body.useWallet=true 时走 rhWalletApiKey;路径白名单含 /files/output/ · /output/ · /files/input/ · /input/ 4 种前缀)"
+      ]
+    }
+  },
+  "executableNodeTypes": [
+    "image", "edit",
+    "multi-angle-3d", "panorama-720", "penguin-portrait",
+    "video", "seedance", "audio", "llm", "runninghub", "runninghub-wallet",
+    "resize", "upscale", "grid-crop", "remove-bg", "combine",
+    "frame-extractor"
+  ],
+  "nonExecutableNodeTypes": {
+    "description": "不参与批量运行的节点(输入 / 纯展示 / 参数谷 / 工具箱提示)",
+    "nodes": [
+      "upload", "text", "idea", "bp", "relay",
+      "portrait-metadata", "storyboard-grid", "image-compare", "video-output",
+      "drawing-board", "browser", "rh-config",
+      "cinematic", "video-motion"
+    ]
+  },
+  "shortcuts": {
+    "Ctrl+Z": "撤销",
+    "Ctrl+Shift+Z / Ctrl+Y": "重做",
+    "Ctrl+C / Ctrl+V / Ctrl+D": "复制 / 粘贴 / 快速复制",
+    "Ctrl+Shift+V": "连边粘贴(保留与原画布邻居的连接)",
+    "Delete / Backspace": "删除选中",
+    "Ctrl+A": "全选",
+    "左键拖动空白": "平移画布",
+    "Ctrl + 左键拖动(画布/组空白)": "框选多个节点",
+    "Ctrl + 左键拖动(图片/视频/音频缩略图)": "跨节点拖拽素材到另一个节点 (phase15)",
+    "右键点击节点/选区": "弹出菜单(组执行/打组/复制/删除)",
+    "打组后右上角 ▶": "执行组内所有节点",
+    "打组后双击标题": "重命名节点组",
+    "中键 / 右键拖动": "平移画布",
+    "空格 + 拖拽": "平移画布(备选)",
+    "ESC (拖拽素材中)": "取消跨节点拖拽"
+  }
+}

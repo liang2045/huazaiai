@@ -1,0 +1,17 @@
+{
+  "name": "imade-backend",
+  "version": "1.0.0",
+  "description": "iMade backend service",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "multer": "^2.0.2",
+    "sharp": "^0.34.5"
+  }
+}

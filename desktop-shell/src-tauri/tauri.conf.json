@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "iMade",
+  "version": "0.1.0",
+  "identifier": "local.design.client",
+  "build": {
+    "beforeDevCommand": "",
+    "devUrl": "http://127.0.0.1:18766/",
+    "beforeBuildCommand": "",
+    "frontendDist": "../../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "iMade",
+        "width": 1480,
+        "height": 920,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "center": true,
+        "maximized": true,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "resources": {
+      "../../service/target/release/service.exe": "bin/service.exe",
+      "../../frontend/dist": "frontend"
+    },
+    "icon": [
+      "icons/app-icon.ico",
+      "icons/window-icon.png"
+    ]
+  }
+}

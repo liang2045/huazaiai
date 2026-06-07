@@ -1,0 +1,143 @@
+{
+  "name": "imade",
+  "private": false,
+  "version": "3.2.3",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "description": "iMade - AI ecommerce detail canvas tool",
+  "author": "iMade",
+  "license": "MIT",
+  "keywords": [
+    "ai",
+    "canvas",
+    "node-editor",
+    "workflow",
+    "runninghub",
+    "electron",
+    "react",
+    "xyflow"
+  ],
+  "scripts": {
+    "dev": "concurrently \"cd backend && npm start\" \"vite\"",
+    "dev:vite": "vite",
+    "dev:backend": "cd backend && npm start",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "type-check": "tsc --noEmit",
+    "electron:dev": "cross-env IMADE_PACKAGED=0 electron electron/main.cjs",
+    "encrypt": "cross-env ELECTRON_RUN_AS_NODE=1 electron electron/encrypt.cjs",
+    "prepack:enc": "npm run build && npm run encrypt",
+    "dist:dir": "npm run prepack:enc && electron-builder --win --x64 --dir && node electron/_post_build.cjs",
+    "dist": "npm run prepack:enc && electron-builder --win --x64 && node electron/_post_build.cjs",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@xyflow/react": "^12.10.0",
+    "bytenode": "^1.5.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "lucide-react": "^0.468.0",
+    "multer": "^2.0.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sharp": "^0.34.5",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "autoprefixer": "^10.4.0",
+    "concurrently": "^9.0.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  },
+  "build": {
+    "appId": "cn.imade.app",
+    "productName": "iMade",
+    "directories": {
+      "output": "dist_electron",
+      "buildResources": "electron/build-resources"
+    },
+    "afterPack": "electron/afterPack.cjs",
+    "compression": "store",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*"
+    ],
+    "files": [
+      "electron/main.cjs",
+      "electron/backend-runner.cjs",
+      "electron/preload.cjs",
+      "electron/loader.cjs",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/electron/**/*",
+      "!node_modules/electron-builder/**/*",
+      "!node_modules/**/*.{md,markdown,ts,map,d.ts}",
+      "!node_modules/**/{test,tests,__tests__,docs,examples,example,sample,benchmark}/**",
+      "!**/*.{ipynb,log}",
+      "!**/.DS_Store",
+      "!backend/**/*",
+      "!src/**/*",
+      "!data/**/*",
+      "!input/**/*",
+      "!output/**/*",
+      "!thumbnails/**/*",
+      "!dist_electron/**/*",
+      "!build/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend-enc",
+        "to": "backend-enc",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "dist",
+        "to": "frontend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "icon": "electron/build-resources/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "iMade-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "iMade",
+      "installerIcon": "electron/build-resources/icon.ico",
+      "installerHeaderIcon": "electron/build-resources/icon.ico",
+      "uninstallerIcon": "electron/build-resources/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

@@ -1,48 +1,22 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Editor
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-
-# Build output
-dist
-dist-ssr
-*.local
-
-# Electron 打包产物与中间产物 (不上传仓库)
+node_modules/
+dist/
 dist_electron/
 build/
-*.tsbuildinfo
-
-# Electron 历史残留 .js 空文件 (已改用 .cjs)
-electron/*.js
-
-# 临时备份文件
-_temp_*
-
-# Dependencies
-node_modules
-.pnp
-.pnp.js
-
-# Backend data(本地数据,不入库)
+target/
+gen/
 data/
 input/
 output/
 thumbnails/
-backend/data/
-
-# Env
+.npm-cache/
+.pytest_cache/
+.runtime-test/
+.chrome-test/
+.chrome-app-test/
+*.tsbuildinfo
+*.log
 .env
-.env.local
-.env.*.local
-
-# OS
-Thumbs.db
+*.db
+*.sqlite
+*.sqlite3
+*.tmp
