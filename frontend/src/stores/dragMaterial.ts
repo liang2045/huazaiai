@@ -69,8 +69,14 @@ export const useDragMaterialStore = create<DragMaterialState>((set) => ({
 
 /** 投放事件名 (CustomEvent.detail = { targetNodeId, payload }) */
 export const MATERIAL_DROP_EVENT = 'imade:material-drop';
+export const CANVAS_REFERENCE_PICK_EVENT = 'imade:canvas-reference-pick';
 
 export interface MaterialDropEventDetail {
+  targetNodeId: string;
+  payload: MaterialPayload;
+}
+
+export interface CanvasReferencePickEventDetail {
   targetNodeId: string;
   payload: MaterialPayload;
 }

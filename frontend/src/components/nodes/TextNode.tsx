@@ -6,6 +6,45 @@ import { useThemeStore } from '../../stores/theme';
 const DEFAULT_FONT = 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 const PLACEHOLDER_TEXT = '输入文字';
 
+const clampPercent = (value: unknown, fallback = 100) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(100, parsed));
+};
+
+const colorWithAlpha = (color: string, alphaPercent: unknown = 100) => {
+  const alpha = clampPercent(alphaPercent) / 100;
+  const value = color || '#111111';
+  const short = /^#([0-9a-f]{3})$/i.exec(value.trim());
+  const long = /^#([0-9a-f]{6})$/i.exec(value.trim());
+  if (!short && !long) return value;
+  const raw = short ? short[1].split('').map((ch) => ch + ch).join('') : long![1];
+  const r = parseInt(raw.slice(0, 2), 16);
+  const g = parseInt(raw.slice(2, 4), 16);
+  const b = parseInt(raw.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${Number(alpha.toFixed(3))})`;
+};
+
+type GradientStop = { id?: string; color?: string; alpha?: number; position?: number };
+type NormalizedGradientStop = { color: string; alpha: number; position: number };
+const makeGradientCss = (d: any, solidColor: string) => {
+  const fallback = [
+    { color: d?.gradientFrom || solidColor, alpha: clampPercent(d?.gradientFromAlpha ?? 100), position: 0 },
+    { color: d?.gradientMiddle || d?.gradientFrom || solidColor, alpha: clampPercent(d?.gradientMiddleAlpha ?? 100), position: 50 },
+    { color: d?.gradientTo || '#ffffff', alpha: clampPercent(d?.gradientToAlpha ?? 100), position: 100 },
+  ];
+  const raw = Array.isArray(d?.gradientStops) ? d.gradientStops : fallback;
+  const stops = raw
+    .map((stop: GradientStop, index: number) => ({
+      color: String(stop?.color || fallback[index]?.color || solidColor),
+      alpha: clampPercent(stop?.alpha ?? fallback[index]?.alpha ?? 100),
+      position: clampPercent(stop?.position ?? fallback[index]?.position ?? (index === 0 ? 0 : 100)),
+    } satisfies NormalizedGradientStop))
+    .sort((a: NormalizedGradientStop, b: NormalizedGradientStop) => a.position - b.position);
+  const usable: NormalizedGradientStop[] = stops.length >= 2 ? stops : fallback;
+  return `linear-gradient(${Number(d?.gradientAngle ?? 90)}deg, ${usable.map((stop: NormalizedGradientStop) => `${colorWithAlpha(stop.color, stop.alpha)} ${stop.position}%`).join(', ')})`;
+};
+
 function measureTextBox(params: {
   text: string;
   fontFamily: string;
@@ -57,7 +96,7 @@ const TextNode = ({ id, data, selected }: NodeProps) => {
   const color = d?.color || (isDark ? '#ffffff' : '#111111');
   const colorMode = d?.colorMode === 'gradient' ? 'gradient' : 'solid';
   const gradientText = colorMode === 'gradient'
-    ? `linear-gradient(${Number(d?.gradientAngle ?? 90)}deg, ${d?.gradientFrom || color}, ${d?.gradientTo || '#ffffff'})`
+    ? makeGradientCss(d, color)
     : '';
   const textAlign = (d?.textAlign || 'left') as CSSProperties['textAlign'];
   const [editing, setEditing] = useState(false);

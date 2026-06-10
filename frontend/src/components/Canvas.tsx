@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { WheelEvent } from 'react';
+import type { PointerEvent as ReactPointerEvent, WheelEvent } from 'react';
 import {
   ReactFlow,
   Background,
@@ -28,7 +28,7 @@ import { useCanvasStore } from '../stores/canvas';
 import { useThemeStore } from '../stores/theme';
 import { useRunBusStore } from '../stores/runBus';
 import { useGroupBusStore, GROUP_COLORS, DEFAULT_GROUP_NAME } from '../stores/groupBus';
-import { useDragMaterialStore } from '../stores/dragMaterial';
+import { CANVAS_REFERENCE_PICK_EVENT, useDragMaterialStore } from '../stores/dragMaterial';
 import { topologicalSort } from '../utils/topologicalSort';
 import { installGlobalWheelBlockObserver } from '../utils/wheelBlock';
 import * as api from '../services/api';
@@ -65,7 +65,7 @@ import OutputNode from './nodes/OutputNode';
 import GroupBoxNode from './nodes/GroupBoxNode';
 import DeletableEdge from './edges/DeletableEdge';
 import { NODE_REGISTRY } from '../config/nodeRegistry';
-import { uploadFile as uploadAssetFile } from '../services/generation';
+import { importMediaUrl, uploadFile as uploadAssetFile } from '../services/generation';
 import { downloadBlob } from '../utils/download';
 import type { NodeType, NodeMeta } from '../types/canvas';
 import {
@@ -128,7 +128,7 @@ const INITIAL_DATA: Record<string, Record<string, any>> = {
     model: 'doubao-seedance-2-0-fast-260128',
     duration: 5,
     ratio: '16:9',
-    resolution: '480p',
+    resolution: '720p',
     generateAudio: true,
     returnLastFrame: false,
     watermark: false,
@@ -213,16 +213,84 @@ const FRAME_PRESETS = [
 ];
 const MIN_FRAME_CREATE_W = 48;
 const MIN_FRAME_CREATE_H = 48;
-const COLOR_SWATCHES = ['#111111', '#ffffff', '#ef4444', '#f97316', '#facc15', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'];
+const BASE_COLOR_SWATCHES = ['#000000', '#ffffff', '#808080'];
+const MIN_CANVAS_ZOOM = 0.03;
+const MAX_CANVAS_ZOOM = 6;
+const CANVAS_EXTENT: [[number, number], [number, number]] = [[-100000, -100000], [100000, 100000]];
 
-const makeLinearGradientCss = (from: string, to: string, angle: number) =>
-  `linear-gradient(${Number.isFinite(angle) ? angle : 90}deg, ${from || '#111111'}, ${to || '#ffffff'})`;
+type GradientStop = {
+  id: string;
+  color: string;
+  alpha: number;
+  position: number;
+};
+
+const clampPercent = (value: unknown, fallback = 100) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(100, parsed));
+};
+
+const colorWithAlpha = (color: string, alphaPercent: unknown = 100) => {
+  const alpha = clampPercent(alphaPercent) / 100;
+  const value = color || '#111111';
+  const hex = value.trim();
+  const short = /^#([0-9a-f]{3})$/i.exec(hex);
+  const long = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!short && !long) return value;
+  const raw = short
+    ? short[1].split('').map((ch) => ch + ch).join('')
+    : long![1];
+  const r = parseInt(raw.slice(0, 2), 16);
+  const g = parseInt(raw.slice(2, 4), 16);
+  const b = parseInt(raw.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${Number(alpha.toFixed(3))})`;
+};
+
+const makeGradientStop = (stop: Partial<GradientStop>, index: number): GradientStop => ({
+  id: String(stop.id || `stop-${index}-${Math.random().toString(36).slice(2, 7)}`),
+  color: String(stop.color || '#ffffff'),
+  alpha: clampPercent(stop.alpha ?? 100),
+  position: clampPercent(stop.position ?? (index === 0 ? 0 : index === 1 ? 100 : 50)),
+});
+
+const normalizeGradientStops = (value: unknown, fallback: GradientStop[]): GradientStop[] => {
+  const raw = Array.isArray(value) ? value : fallback;
+  const stops = raw
+    .map((stop, index) => makeGradientStop((stop || {}) as Partial<GradientStop>, index))
+    .sort((a, b) => a.position - b.position);
+  if (stops.length >= 2) return stops;
+  return fallback.map((stop, index) => makeGradientStop(stop, index));
+};
+
+const legacyTextGradientStops = (data: Record<string, any>, solidColor: string): GradientStop[] => normalizeGradientStops(null, [
+  { id: 'from', color: data.gradientFrom || solidColor || '#111111', alpha: clampPercent(data.gradientFromAlpha ?? 100), position: 0 },
+  { id: 'middle', color: data.gradientMiddle || data.gradientFrom || solidColor || '#808080', alpha: clampPercent(data.gradientMiddleAlpha ?? 100), position: 50 },
+  { id: 'to', color: data.gradientTo || '#ffffff', alpha: clampPercent(data.gradientToAlpha ?? 100), position: 100 },
+]);
+
+const legacyFrameGradientStops = (data: Record<string, any>, solidColor: string): GradientStop[] => normalizeGradientStops(null, [
+  { id: 'from', color: data.backgroundGradientFrom || solidColor || '#ffffff', alpha: clampPercent(data.backgroundGradientFromAlpha ?? 100), position: 0 },
+  { id: 'middle', color: data.backgroundGradientMiddle || data.backgroundGradientFrom || solidColor || '#dbeafe', alpha: clampPercent(data.backgroundGradientMiddleAlpha ?? 100), position: 50 },
+  { id: 'to', color: data.backgroundGradientTo || '#dbeafe', alpha: clampPercent(data.backgroundGradientToAlpha ?? 100), position: 100 },
+]);
+
+const getTextGradientStops = (data: Record<string, any>, solidColor = '#111111') =>
+  normalizeGradientStops(data.gradientStops, legacyTextGradientStops(data, solidColor));
+
+const getFrameGradientStops = (data: Record<string, any>, solidColor = '#ffffff') =>
+  normalizeGradientStops(data.backgroundGradientStops, legacyFrameGradientStops(data, solidColor));
+
+const makeLinearGradientCss = (stops: GradientStop[], angle: number) => {
+  const sorted = normalizeGradientStops(stops, stops).sort((a, b) => a.position - b.position);
+  const parts = sorted.map((stop) => `${colorWithAlpha(stop.color, stop.alpha)} ${clampPercent(stop.position)}%`);
+  return `linear-gradient(${Number.isFinite(angle) ? angle : 90}deg, ${parts.join(', ')})`;
+};
 
 const getFrameBackgroundCss = (data: Record<string, any>) => {
   if (data.backgroundMode === 'gradient') {
     return makeLinearGradientCss(
-      data.backgroundGradientFrom || '#ffffff',
-      data.backgroundGradientTo || '#dbeafe',
+      getFrameGradientStops(data, data.backgroundColor || '#ffffff'),
       Number(data.backgroundGradientAngle ?? 90),
     );
   }
@@ -250,8 +318,9 @@ const drawBackgroundPaint = (ctx: CanvasRenderingContext2D, data: Record<string,
       cx + Math.cos(angle) * len / 2,
       cy + Math.sin(angle) * len / 2,
     );
-    grad.addColorStop(0, data.backgroundGradientFrom || '#ffffff');
-    grad.addColorStop(1, data.backgroundGradientTo || '#dbeafe');
+    getFrameGradientStops(data, data.backgroundColor || '#ffffff').forEach((stop) => {
+      grad.addColorStop(clampPercent(stop.position) / 100, colorWithAlpha(stop.color, stop.alpha));
+    });
     ctx.fillStyle = grad;
   } else {
     ctx.fillStyle = data.backgroundColor || 'rgba(128,128,128,.12)';
@@ -494,7 +563,7 @@ function BulkPhantomNode() {
 }
 nodeTypes.bulkPhantom = BulkPhantomNode;
 const BULK_PHANTOM_ID = '__bulk_phantom__';
-const REMOVED_NODE_TYPES = new Set<string>(['runninghub', 'runninghub-wallet', 'rh-config']);
+const REMOVED_NODE_TYPES = new Set<string>();
 
 function withoutRemovedNodes(ns: Node[], es: Edge[]) {
   const nodes = ns.filter((n) => !REMOVED_NODE_TYPES.has(String(n.type || '')));
@@ -534,9 +603,17 @@ interface CanvasInnerProps {
   onAddNodeRef?: React.MutableRefObject<((type: NodeType) => void) | null>;
   onSaveRef?: React.MutableRefObject<(() => Promise<void>) | null>;
   interactionMode?: CanvasInteractionMode;
+  inspectorCollapsed?: boolean;
+  onInspectorCollapsedChange?: (collapsed: boolean) => void;
 }
 
-function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: CanvasInnerProps) {
+function CanvasInner({
+  onAddNodeRef,
+  onSaveRef,
+  interactionMode = 'select',
+  inspectorCollapsed: controlledInspectorCollapsed,
+  onInspectorCollapsedChange,
+}: CanvasInnerProps) {
   const { activeId } = useCanvasStore();
   const { theme, style } = useThemeStore();
   const { screenToFlowPosition, setCenter, getViewport, setViewport } = useReactFlow();
@@ -618,7 +695,15 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
     end: { x: number; y: number };
   } | null>(null);
   const [customFrameSize, setCustomFrameSize] = useState({ w: 800, h: 800 });
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(true);
+  const [localInspectorCollapsed, setLocalInspectorCollapsed] = useState(true);
+  const inspectorCollapsed = controlledInspectorCollapsed ?? localInspectorCollapsed;
+  const setInspectorCollapsed = useCallback((collapsed: boolean) => {
+    if (onInspectorCollapsedChange) {
+      onInspectorCollapsedChange(collapsed);
+      return;
+    }
+    setLocalInspectorCollapsed(collapsed);
+  }, [onInspectorCollapsedChange]);
   const [inspectorPosition, setInspectorPosition] = useState(getInitialInspectorPosition);
   const inspectorDragRef = useRef<{
     startX: number;
@@ -935,45 +1020,124 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
   );
 
   // ===== 澶嶅埗 / 绮樿创 / 鍒犻櫎 =====
-  const getDroppedImageFiles = (e: React.DragEvent): File[] =>
-    Array.from(e.dataTransfer?.files || []).filter((file) => file.type.startsWith('image/'));
+  const getDroppedMediaKind = (file: File): 'image' | 'video' | null => {
+    const type = String(file.type || '').toLowerCase();
+    const name = String(file.name || '').toLowerCase();
+    if (type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(name)) return 'image';
+    if (type.startsWith('video/') || /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(name)) return 'video';
+    return null;
+  };
+
+  const getDroppedMediaFiles = (e: React.DragEvent): File[] =>
+    Array.from(e.dataTransfer?.files || []).filter((file) => !!getDroppedMediaKind(file));
+
+  const getDroppedExternalUrls = (e: React.DragEvent): string[] => {
+    const dt = e.dataTransfer;
+    if (!dt) return [];
+    const values = [
+      dt.getData('text/uri-list'),
+      dt.getData('text/plain'),
+    ];
+    const html = dt.getData('text/html');
+    if (html) {
+      const srcMatches = Array.from(html.matchAll(/\s(?:src|href)=["']([^"']+)["']/gi)).map((match) => match[1]);
+      values.push(...srcMatches);
+    }
+    const urls = values
+      .flatMap((value) => String(value || '').split(/[\r\n\t ]+/))
+      .map((value) => value.trim())
+      .filter((value) => value && !value.startsWith('#'))
+      .filter((value) => /^https?:\/\//i.test(value));
+    return Array.from(new Set(urls));
+  };
+
+  const inferFileNameFromUrl = (url: string, fallback: string) => {
+    try {
+      const parsed = new URL(url);
+      const last = parsed.pathname.split('/').filter(Boolean).pop();
+      return last ? decodeURIComponent(last) : fallback;
+    } catch {
+      return fallback;
+    }
+  };
 
   const handlePaneDragOver = useCallback((e: React.DragEvent) => {
-    const hasImage = Array.from(e.dataTransfer?.items || []).some(
-      (item) => item.kind === 'file' && item.type.startsWith('image/')
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (target?.closest('.react-flow__node')) return;
+    const droppedFiles = getDroppedMediaFiles(e);
+    const hasExternalUrl = Array.from(e.dataTransfer?.types || []).some((type) =>
+      ['text/uri-list', 'text/plain', 'text/html'].includes(type)
     );
-    if (!hasImage) return;
+    const hasMedia = Array.from(e.dataTransfer?.items || []).some(
+      (item) => item.kind === 'file' && (item.type.startsWith('image/') || item.type.startsWith('video/') || !item.type)
+    ) || droppedFiles.length > 0 || hasExternalUrl;
+    if (!hasMedia) return;
     e.preventDefault();
+    e.stopPropagation();
     e.dataTransfer.dropEffect = 'copy';
   }, []);
 
   const handlePaneDrop = useCallback(
     async (e: React.DragEvent) => {
-      const files = getDroppedImageFiles(e);
-      if (!files.length) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (target?.closest('.react-flow__node')) return;
+      const files = getDroppedMediaFiles(e);
+      const externalUrls = getDroppedExternalUrls(e);
+      if (!files.length && !externalUrls.length) return;
       e.preventDefault();
       e.stopPropagation();
 
       const base = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      let offset = 0;
       for (let i = 0; i < files.length; i += 1) {
         const file = files[i];
         try {
           const uploaded = await uploadAssetFile(file);
+          const uploadType = getDroppedMediaKind(file);
+          if (!uploadType) continue;
           const newNode: Node = {
             id: `upload-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`,
             type: 'upload',
-            position: { x: base.x + i * 34, y: base.y + i * 34 },
+            position: { x: base.x + offset * 34, y: base.y + offset * 34 },
             data: {
-              uploadType: 'image',
-              imageUrl: uploaded.url,
+              uploadType,
+              ...(uploadType === 'video' ? { videoUrl: uploaded.url } : { imageUrl: uploaded.url }),
               fileName: file.name,
               fileSize: file.size,
               mime: file.type,
             },
           };
           setNodes((prev) => [...prev, { ...newNode, zIndex: getNextLayerZ(prev, 'upload') }]);
+          offset += 1;
         } catch (err) {
           console.error('鍥剧墖鎷栧叆涓婁紶澶辫触', err);
+        }
+      }
+      for (let i = 0; i < externalUrls.length; i += 1) {
+        const url = externalUrls[i];
+        try {
+          const imported = await importMediaUrl(url, inferFileNameFromUrl(url, `external-${Date.now()}-${i}`));
+          const uploadType = imported.uploadType || (String(imported.mime || '').startsWith('video/') ? 'video' : 'image');
+          const newNode: Node = {
+            id: `upload-url-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`,
+            type: 'upload',
+            position: { x: base.x + offset * 34, y: base.y + offset * 34 },
+            data: {
+              uploadType,
+              ...(uploadType === 'video' ? { videoUrl: imported.url } : { imageUrl: imported.url }),
+              fileName: imported.filename || inferFileNameFromUrl(url, 'external-media'),
+              fileSize: imported.size || 0,
+              mime: imported.mime || '',
+              sourceUrl: url,
+            },
+          };
+          setNodes((prev) => [...prev, { ...newNode, zIndex: getNextLayerZ(prev, 'upload') }]);
+          offset += 1;
+        } catch (err) {
+          console.error('澶栭儴绱犳潗瀵煎叆澶辫触', err);
+          alert(`外部素材导入失败: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     },
@@ -1275,8 +1439,9 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
             x + w / 2 + Math.cos(angle) * len / 2,
             y + h / 2 + Math.sin(angle) * len / 2,
           );
-          grad.addColorStop(0, data.gradientFrom || data.color || '#111111');
-          grad.addColorStop(1, data.gradientTo || '#ffffff');
+          getTextGradientStops(data, data.color || '#111111').forEach((stop) => {
+            grad.addColorStop(clampPercent(stop.position) / 100, colorWithAlpha(stop.color, stop.alpha));
+          });
           ctx.fillStyle = grad;
         } else {
           ctx.fillStyle = data.color || '#111111';
@@ -1942,6 +2107,7 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
   const activeFrameW = Math.round(Number(selectedFrameData.frameW || selectedFrameData.resolutionW || customFrameSize.w || 800));
   const activeFrameH = Math.round(Number(selectedFrameData.frameH || selectedFrameData.resolutionH || customFrameSize.h || 800));
   const selectedTextIdsRef = useRef<string[]>([]);
+  const gradientBarRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (selectedTextNodes.length > 0) {
       selectedTextIdsRef.current = selectedTextNodes.map((n) => n.id);
@@ -1963,15 +2129,21 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
   const currentSolidColor = colorTarget === 'frame'
     ? (colorTargetData.backgroundColor || '#ffffff')
     : currentTextColor;
-  const currentGradientFrom = colorTarget === 'frame'
-    ? (colorTargetData.backgroundGradientFrom || currentSolidColor)
-    : (colorTargetData.gradientFrom || currentSolidColor);
-  const currentGradientTo = colorTarget === 'frame'
-    ? (colorTargetData.backgroundGradientTo || '#dbeafe')
-    : (colorTargetData.gradientTo || '#ffffff');
   const currentGradientAngle = Number(colorTarget === 'frame'
     ? (colorTargetData.backgroundGradientAngle ?? 90)
     : (colorTargetData.gradientAngle ?? 90));
+  const currentGradientStops = useMemo(() => {
+    if (colorTarget === 'frame') return getFrameGradientStops(colorTargetData, currentSolidColor);
+    return getTextGradientStops(colorTargetData, currentSolidColor);
+  }, [colorTarget, colorTargetData, currentSolidColor]);
+  const gradientStopsField = colorTarget === 'frame' ? 'backgroundGradientStops' : 'gradientStops';
+  const gradientSelectedField = colorTarget === 'frame' ? 'backgroundGradientSelectedStopId' : 'gradientSelectedStopId';
+  const selectedGradientStopId = String(colorTargetData[gradientSelectedField] || currentGradientStops[0]?.id || '');
+  const selectedGradientStop = currentGradientStops.find((stop) => stop.id === selectedGradientStopId) || currentGradientStops[0];
+  const currentPaletteSwatches = useMemo(() => {
+    const current = String(currentSolidColor || '#808080');
+    return [...BASE_COLOR_SWATCHES, current];
+  }, [currentSolidColor]);
   const inspectorInputClass = `mt-1 w-full rounded-md border px-2 py-1.5 text-xs outline-none disabled:cursor-not-allowed disabled:opacity-40 ${
     theme === 'dark'
       ? 'border-white/14 bg-zinc-950/80 text-white placeholder:text-white/30 focus:border-white/30 focus:bg-zinc-900/90'
@@ -2078,6 +2250,93 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
     if (colorTarget === 'text') updateSelectedText(patch);
     if (colorTarget === 'frame') updateSelectedFrameBackground(patch);
   }, [colorTarget, updateSelectedFrameBackground, updateSelectedText]);
+
+  const setCurrentGradientStops = useCallback((stops: GradientStop[], selectedId?: string) => {
+    if (!colorTarget) return;
+    const normalized = normalizeGradientStops(stops, currentGradientStops);
+    updateCurrentColorTarget({
+      [gradientStopsField]: normalized,
+      [gradientSelectedField]: selectedId || selectedGradientStopId || normalized[0]?.id,
+      ...(colorTarget === 'frame' ? { backgroundMode: 'gradient' } : { colorMode: 'gradient' }),
+    });
+  }, [colorTarget, currentGradientStops, gradientSelectedField, gradientStopsField, selectedGradientStopId, updateCurrentColorTarget]);
+
+  const updateCurrentGradientStop = useCallback((patch: Partial<GradientStop>) => {
+    if (!selectedGradientStop) return;
+    setCurrentGradientStops(
+      currentGradientStops.map((stop) =>
+        stop.id === selectedGradientStop.id
+          ? makeGradientStop({ ...stop, ...patch }, 0)
+          : stop
+      ),
+      selectedGradientStop.id,
+    );
+  }, [currentGradientStops, selectedGradientStop, setCurrentGradientStops]);
+
+  const addGradientStopAt = useCallback((position: number) => {
+    const sorted = [...currentGradientStops].sort((a, b) => a.position - b.position);
+    const pos = clampPercent(position);
+    let left = sorted[0];
+    let right = sorted[sorted.length - 1];
+    for (let i = 0; i < sorted.length - 1; i += 1) {
+      if (pos >= sorted[i].position && pos <= sorted[i + 1].position) {
+        left = sorted[i];
+        right = sorted[i + 1];
+        break;
+      }
+    }
+    const next: GradientStop = {
+      id: `stop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      color: left?.color || right?.color || currentSolidColor || '#ffffff',
+      alpha: Math.round(((left?.alpha ?? 100) + (right?.alpha ?? 100)) / 2),
+      position: pos,
+    };
+    setCurrentGradientStops([...currentGradientStops, next], next.id);
+  }, [currentGradientStops, currentSolidColor, setCurrentGradientStops]);
+
+  const deleteCurrentGradientStop = useCallback(() => {
+    if (!selectedGradientStop || currentGradientStops.length <= 2) return;
+    const sorted = [...currentGradientStops].sort((a, b) => a.position - b.position);
+    const deletedIndex = sorted.findIndex((stop) => stop.id === selectedGradientStop.id);
+    const next = currentGradientStops.filter((stop) => stop.id !== selectedGradientStop.id);
+    const nextSorted = [...next].sort((a, b) => a.position - b.position);
+    const nextSelected = nextSorted[Math.min(Math.max(deletedIndex, 0), nextSorted.length - 1)];
+    setCurrentGradientStops(next, nextSelected?.id);
+  }, [currentGradientStops, selectedGradientStop, setCurrentGradientStops]);
+
+  const gradientPositionFromClientX = useCallback((clientX: number) => {
+    const rect = gradientBarRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return 0;
+    return clampPercent(((clientX - rect.left) / rect.width) * 100);
+  }, []);
+
+  const beginGradientStopDrag = useCallback((stopId: string, event: ReactPointerEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    updateCurrentColorTarget({
+      [gradientSelectedField]: stopId,
+      ...(colorTarget === 'frame' ? { backgroundMode: 'gradient' } : { colorMode: 'gradient' }),
+    });
+    const move = (moveEvent: PointerEvent) => {
+      const position = gradientPositionFromClientX(moveEvent.clientX);
+      const nextStops = currentGradientStops.map((stop) =>
+        stop.id === stopId ? { ...stop, position } : stop
+      );
+      updateCurrentColorTarget({
+        [gradientStopsField]: normalizeGradientStops(nextStops, currentGradientStops),
+        [gradientSelectedField]: stopId,
+        ...(colorTarget === 'frame' ? { backgroundMode: 'gradient' } : { colorMode: 'gradient' }),
+      });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  }, [colorTarget, currentGradientStops, gradientPositionFromClientX, gradientSelectedField, gradientStopsField, updateCurrentColorTarget]);
 
   const alignSelectedNodes = useCallback((mode: 'left' | 'hcenter' | 'right' | 'top' | 'vcenter' | 'bottom') => {
     setNodes((prev) => {
@@ -2216,6 +2475,52 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
   // 框选结束只保留选中状态；菜单仅由右键触发。
   const onSelectionEnd = useCallback(() => {}, []);
 
+  useEffect(() => {
+    const onCanvasReferencePick = (event: Event) => {
+      const detail = (event as CustomEvent).detail as {
+        targetNodeId?: string;
+        payload?: { sourceNodeId?: string; kind?: string; url?: string };
+      } | undefined;
+      const targetNodeId = detail?.targetNodeId;
+      const sourceNodeId = detail?.payload?.sourceNodeId;
+      const referenceUrl = detail?.payload?.url;
+      if (!targetNodeId || !sourceNodeId || targetNodeId === sourceNodeId) return;
+      if (detail?.payload?.kind !== 'image' || !referenceUrl) return;
+      setNodes((prev) =>
+        prev.map((node) => {
+          if (node.id !== targetNodeId || (node.type !== 'image' && node.type !== 'edit')) return node;
+          const data = ((node.data as any) || {});
+          const refs = Array.isArray(data.referenceImages) ? data.referenceImages : [];
+          if (refs.includes(referenceUrl)) return node;
+          return {
+            ...node,
+            data: {
+              ...data,
+              referenceImages: [...refs, referenceUrl],
+            },
+          };
+        }),
+      );
+      setEdges((prev) => {
+        const exists = prev.some((edge) => edge.source === sourceNodeId && edge.target === targetNodeId);
+        if (exists) return prev;
+        return [
+          ...prev,
+          {
+            id: `ref-${sourceNodeId}-${targetNodeId}-${Date.now()}`,
+            source: sourceNodeId,
+            target: targetNodeId,
+            type: 'deletable',
+            data: { relation: 'reference' },
+          },
+        ];
+      });
+      endReferencePick();
+    };
+    window.addEventListener(CANVAS_REFERENCE_PICK_EVENT, onCanvasReferencePick);
+    return () => window.removeEventListener(CANVAS_REFERENCE_PICK_EVENT, onCanvasReferencePick);
+  }, [endReferencePick]);
+
   // 鏆撮湶 addNode 缁欑埗缁勪欢
   useEffect(() => {
     if (onAddNodeRef) {
@@ -2240,7 +2545,30 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
         }
       }
       setNodes((nds) => {
-        const next = applyFrameClipping(applyNodeChanges(changes, nds));
+        const changedDimensions = new Map<string, { w: number; h: number }>();
+        for (const c of changes) {
+          if (c.type !== 'dimensions') continue;
+          const width = Number((c as any).dimensions?.width || (c as any).width || 0);
+          const height = Number((c as any).dimensions?.height || (c as any).height || 0);
+          if (width > 0 && height > 0) {
+            changedDimensions.set(c.id, { w: Math.round(width), h: Math.round(height) });
+          }
+        }
+        const applied = applyNodeChanges(changes, nds).map((node) => {
+          const size = changedDimensions.get(node.id);
+          if (!size || node.type !== 'drawing-board') return node;
+          return {
+            ...node,
+            data: {
+              ...((node.data as any) || {}),
+              frameW: size.w,
+              frameH: size.h,
+              resolutionW: size.w,
+              resolutionH: size.h,
+            },
+          };
+        });
+        const next = applyFrameClipping(applied);
         // 鍚屾閫変腑鏁?鐢?next 璁＄畻鏇村噯纭?
         const selCount = next.reduce((acc, n) => acc + (n.selected ? 1 : 0), 0);
         setSelectedCount(selCount);
@@ -3237,7 +3565,7 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
     const flowPoint = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     const { zoom } = getViewport();
     const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15;
-    const nextZoom = Math.min(3, Math.max(0.15, zoom * factor));
+    const nextZoom = Math.min(MAX_CANVAS_ZOOM, Math.max(MIN_CANVAS_ZOOM, zoom * factor));
     const localX = event.clientX - bounds.left;
     const localY = event.clientY - bounds.top;
 
@@ -3263,7 +3591,12 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
   }
 
   return (
-    <div className="flex-1 relative" style={{ background: bgColor, cursor: frameCreateMode ? 'crosshair' : undefined }}>
+    <div
+      className="flex-1 relative"
+      style={{ background: bgColor, cursor: frameCreateMode ? 'crosshair' : undefined }}
+      onDragOverCapture={handlePaneDragOver}
+      onDropCapture={handlePaneDrop}
+    >
       <TerminalPanel />
       <input
         ref={fileInputRef}
@@ -3297,8 +3630,10 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
         selectionKeyCode={memoSelectionKeyCode}
         multiSelectionKeyCode={memoMultiSelectionKeyCode}
         defaultViewport={memoDefaultViewport}
-        minZoom={0.15}
-        maxZoom={3}
+        minZoom={MIN_CANVAS_ZOOM}
+        maxZoom={MAX_CANVAS_ZOOM}
+        translateExtent={CANVAS_EXTENT}
+        nodeExtent={CANVAS_EXTENT}
         zoomOnScroll={false}
         onWheelCapture={handleCanvasWheel}
         selectionMode={SelectionMode.Partial}
@@ -3422,27 +3757,7 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
       {/* 璺ㄨ妭鐐圭礌鏉愭嫋鎷芥诞灞?(Ctrl + 榧犳爣宸﹂敭 浠庣礌鏉愮缉鐣ュ浘鎷栧嚭) */}
       <MaterialDragOverlay />
 
-      {inspectorCollapsed ? (
-        <div className="fixed right-3 top-3 z-40 select-none">
-          <button
-            type="button"
-            className={`relative flex h-9 w-9 items-center justify-center rounded-md border shadow-lg transition ${
-              isDark ? 'border-white/10 bg-zinc-900 text-zinc-200 hover:bg-white/10' : 'border-black/10 bg-white text-zinc-700 hover:bg-black/5'
-            }`}
-            title="展开属性面板"
-            onClick={() => setInspectorCollapsed(false)}
-          >
-            <InspectorIcon size={16} />
-            {selectedNodes.length > 0 && (
-              <span className={`absolute -right-1 -top-1 min-w-4 rounded px-1 text-[9px] leading-4 ${
-                isDark ? 'bg-amber-500 text-black' : 'bg-zinc-900 text-white'
-              }`}>
-                {selectedNodes.length}
-              </span>
-            )}
-          </button>
-        </div>
-      ) : (
+      {!inspectorCollapsed && (
         <div
           className="fixed z-40"
           style={{ left: inspectorPosition.x, top: inspectorPosition.y, width: INSPECTOR_W, pointerEvents: 'none' }}
@@ -3613,14 +3928,14 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
                         : { colorMode: 'solid', color: e.target.value })}
                       className="h-8 w-9 rounded border-0 bg-transparent p-0"
                     />
-                    <div className="grid flex-1 grid-cols-5 gap-1">
-                      {COLOR_SWATCHES.map((color) => (
+                    <div className="grid flex-1 grid-cols-4 gap-1">
+                      {currentPaletteSwatches.map((color, index) => (
                         <button
-                          key={color}
+                          key={`${color}-${index}`}
                           type="button"
                           className="h-6 rounded border"
                           style={{ background: color, borderColor: isDark ? 'rgba(255,255,255,.16)' : 'rgba(0,0,0,.16)' }}
-                          title={color}
+                          title={index === 3 ? `当前颜色 ${color}` : color}
                           onClick={() => updateCurrentColorTarget(colorTarget === 'frame'
                             ? { backgroundMode: 'solid', backgroundColor: color }
                             : { colorMode: 'solid', color })}
@@ -3629,33 +3944,93 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-1.5">
+                  <div className="space-y-2">
                     <div
-                      className="h-7 rounded-md border"
+                      ref={gradientBarRef}
+                      className="relative h-8 rounded-md border"
                       style={{
-                        background: makeLinearGradientCss(currentGradientFrom, currentGradientTo, currentGradientAngle),
+                        background: makeLinearGradientCss(currentGradientStops, currentGradientAngle),
                         borderColor: isDark ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.12)',
                       }}
+                      onClick={(e) => {
+                        if ((e.target as HTMLElement).closest('[data-gradient-stop]')) return;
+                        addGradientStopAt(gradientPositionFromClientX(e.clientX));
+                      }}
                     />
-                    <div className="grid grid-cols-[auto_auto_1fr] gap-1.5">
-                      <input
-                        type="color"
-                        value={currentGradientFrom}
-                        onChange={(e) => updateCurrentColorTarget(colorTarget === 'frame'
-                          ? { backgroundMode: 'gradient', backgroundGradientFrom: e.target.value }
-                          : { colorMode: 'gradient', gradientFrom: e.target.value })}
-                        className="h-8 w-9 rounded border-0 bg-transparent p-0"
-                        title="起始色"
-                      />
-                      <input
-                        type="color"
-                        value={currentGradientTo}
-                        onChange={(e) => updateCurrentColorTarget(colorTarget === 'frame'
-                          ? { backgroundMode: 'gradient', backgroundGradientTo: e.target.value }
-                          : { colorMode: 'gradient', gradientTo: e.target.value })}
-                        className="h-8 w-9 rounded border-0 bg-transparent p-0"
-                        title="结束色"
-                      />
+                    <div className="relative -mt-2 h-4">
+                      {currentGradientStops.map((stop) => {
+                        const active = selectedGradientStop?.id === stop.id;
+                        return (
+                          <button
+                            key={stop.id}
+                            type="button"
+                            data-gradient-stop
+                            className={`absolute top-0 h-4 w-3 -translate-x-1/2 rounded-[3px] border shadow-sm ${active ? 'border-sky-300 ring-2 ring-sky-400/45' : isDark ? 'border-white/70' : 'border-zinc-700/70'}`}
+                            style={{ left: `${clampPercent(stop.position)}%`, background: colorWithAlpha(stop.color, stop.alpha) }}
+                            title={`${Math.round(stop.position)}% / ${Math.round(stop.alpha)}%`}
+                            onPointerDown={(e) => beginGradientStopDrag(stop.id, e)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateCurrentColorTarget({ [gradientSelectedField]: stop.id });
+                            }}
+                            onDoubleClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (currentGradientStops.length <= 2) return;
+                              updateCurrentColorTarget({ [gradientSelectedField]: stop.id });
+                              const next = currentGradientStops.filter((item) => item.id !== stop.id);
+                              const nextSorted = [...next].sort((a, b) => a.position - b.position);
+                              setCurrentGradientStops(next, nextSorted[0]?.id);
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                    {selectedGradientStop && (
+                      <div className="grid grid-cols-[auto_1fr_1fr_auto] items-end gap-1.5">
+                        <label className={isDark ? 'text-[10px] text-white/45' : 'text-[10px] text-zinc-500'}>
+                          颜色
+                          <input
+                            type="color"
+                            value={selectedGradientStop.color}
+                            onChange={(e) => updateCurrentGradientStop({ color: e.target.value })}
+                            className="mt-1 h-7 w-10 rounded border-0 bg-transparent p-0"
+                          />
+                        </label>
+                        <label className={isDark ? 'text-[10px] text-white/45' : 'text-[10px] text-zinc-500'}>
+                          位置
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={Math.round(selectedGradientStop.position)}
+                            onChange={(e) => updateCurrentGradientStop({ position: clampPercent(e.target.value) })}
+                            className={`${inspectorInputClass} h-7 py-0.5`}
+                          />
+                        </label>
+                        <label className={isDark ? 'text-[10px] text-white/45' : 'text-[10px] text-zinc-500'}>
+                          透明度
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={Math.round(selectedGradientStop.alpha)}
+                            onChange={(e) => updateCurrentGradientStop({ alpha: clampPercent(e.target.value) })}
+                            className={`${inspectorInputClass} h-7 py-0.5`}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          disabled={currentGradientStops.length <= 2}
+                          className={`mb-0 h-7 rounded-md px-2 text-[10px] transition disabled:cursor-not-allowed disabled:opacity-35 ${isDark ? 'bg-white/8 text-white/65 hover:bg-white/14' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'}`}
+                          title={currentGradientStops.length <= 2 ? '至少保留 2 个渐变点' : '删除选中的渐变点'}
+                          onClick={deleteCurrentGradientStop}
+                        >
+                          删除点
+                        </button>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-[1fr_auto] gap-1.5">
                       <input
                         type="number"
                         min={0}
@@ -3667,6 +4042,7 @@ function CanvasInner({ onAddNodeRef, onSaveRef, interactionMode = 'select' }: Ca
                         className={inspectorInputClass}
                         title="渐变角度"
                       />
+                      <span className={isDark ? 'self-end pb-1.5 text-[10px] text-white/35' : 'self-end pb-1.5 text-[10px] text-zinc-400'}>角度</span>
                     </div>
                   </div>
                 )}
@@ -4239,6 +4615,8 @@ interface CanvasProps {
   onAddNodeRef?: React.MutableRefObject<((type: NodeType) => void) | null>;
   onSaveRef?: React.MutableRefObject<(() => Promise<void>) | null>;
   interactionMode?: CanvasInteractionMode;
+  inspectorCollapsed?: boolean;
+  onInspectorCollapsedChange?: (collapsed: boolean) => void;
 }
 
 export default function Canvas(props: CanvasProps) {

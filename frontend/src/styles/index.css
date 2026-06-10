@@ -725,6 +725,19 @@ body.cut-mode .react-flow__edge .react-flow__edge-interaction {
   to { stroke-dashoffset: 0; }
 }
 
+@keyframes imade-edge-end-pulse {
+  0%, 100% {
+    transform: scale(.82);
+    opacity: 0.62;
+    filter: drop-shadow(0 0 3px rgba(126, 227, 90, .35));
+  }
+  50% {
+    transform: scale(1.32);
+    opacity: 1;
+    filter: drop-shadow(0 0 8px rgba(126, 227, 90, .72));
+  }
+}
+
 .imade-edge-base-path {
   stroke: rgba(214, 214, 214, 0.46) !important;
   stroke-width: 1.4;
@@ -740,6 +753,19 @@ body.cut-mode .react-flow__edge .react-flow__edge-interaction {
   animation: imade-edge-flow 1.45s linear infinite;
   opacity: 0.95;
   filter: drop-shadow(0 0 5px rgba(126, 227, 90, .52));
+}
+
+.imade-edge-end-pulse {
+  fill: #7ee35a;
+  stroke: rgba(255, 255, 255, .72);
+  stroke-width: 1.2;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: imade-edge-end-pulse 1.15s ease-in-out infinite;
+}
+
+.imade-edge-end-pulse--target {
+  animation-delay: .18s;
 }
 
 /* Generic media resize handles use the same corner-mark language as drawing boards. */

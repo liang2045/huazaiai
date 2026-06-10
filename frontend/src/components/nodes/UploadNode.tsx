@@ -15,7 +15,7 @@ import { useUpdateNodeData } from './useUpdateNodeData';
 import { useThemeStore } from '../../stores/theme';
 import { PORT_COLOR } from '../../config/portTypes';
 import { useRunTrigger } from '../../hooks/useRunTrigger';
-import { MATERIAL_DROP_EVENT, useDragMaterialStore, type MaterialPayload } from '../../stores/dragMaterial';
+import { CANVAS_REFERENCE_PICK_EVENT, useDragMaterialStore, type MaterialPayload } from '../../stores/dragMaterial';
 import ImageEditModal, { type ImageEditProduceMeta } from './ImageEditModal';
 import ResizableCorners from './ResizableCorners';
 import { downloadAsset } from '../../utils/download';
@@ -80,8 +80,14 @@ const KIND_META: Record<
 
 /** 通过文件 MIME 推断上传类型(支持拖拽时自动选定类型) */
 function inferKindFromFile(file: File): UploadKind | null {
-  const m = file.type;
-  if (!m) return null;
+  const m = String(file.type || '').toLowerCase();
+  const name = String(file.name || '').toLowerCase();
+  if (!m) {
+    if (/\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(name)) return 'image';
+    if (/\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(name)) return 'video';
+    if (/\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(name)) return 'audio';
+    return null;
+  }
   if (m.startsWith('image/')) return 'image';
   if (m.startsWith('video/')) return 'video';
   if (m.startsWith('audio/')) return 'audio';
@@ -121,9 +127,29 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
 
   // 节点本地尺寸 state: 默认 (260, 高度由内容撑开 — 上传后图/视频会撑高 root)
   // 拖角后由 ResizableCorners onResize 同步具体 px (保证 measured 准确 + keepAspectRatio 生效 + handleBounds 准确)
-  const [size, setSize] = useState<{ w: number; h?: number }>({ w: DEFAULT_UPLOAD_WIDTH });
+  const [size, setSize] = useState<{ w: number; h?: number }>(() => ({
+    w: Math.max(1, Number(d?.width || d?.imageWidth || d?.videoWidth || DEFAULT_UPLOAD_WIDTH)),
+    h: Number(d?.height || d?.imageHeight || d?.videoHeight || 0) || undefined,
+  }));
   const refreshNodeInternals = () => {
     window.requestAnimationFrame(() => updateNodeInternals(id));
+  };
+
+  const syncSizeFromMedia = (w: number, h: number, kind: UploadKind) => {
+    if (w <= 0 || h <= 0) return;
+    const next = { w: Math.round(w), h: Math.round(h) };
+    const patch: Record<string, any> = { width: next.w, height: next.h };
+    if (kind === 'image') {
+      patch.imageWidth = next.w;
+      patch.imageHeight = next.h;
+    }
+    if (kind === 'video') {
+      patch.videoWidth = next.w;
+      patch.videoHeight = next.h;
+    }
+    setSize((prev) => (prev.w === next.w && prev.h === next.h ? prev : next));
+    update(patch);
+    refreshNodeInternals();
   };
 
   useEffect(() => {
@@ -210,7 +236,7 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
     if (!referencePickTargetId || payload.kind !== 'image' || !payload.url) return false;
     e.preventDefault();
     e.stopPropagation();
-    window.dispatchEvent(new CustomEvent(MATERIAL_DROP_EVENT, {
+    window.dispatchEvent(new CustomEvent(CANVAS_REFERENCE_PICK_EVENT, {
       detail: { targetNodeId: referencePickTargetId, payload },
     }));
     return true;
@@ -226,7 +252,14 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
       fileName: '',
       fileSize: 0,
       mime: '',
+      width: undefined,
+      height: undefined,
+      imageWidth: undefined,
+      imageHeight: undefined,
+      videoWidth: undefined,
+      videoHeight: undefined,
     });
+    setSize({ w: DEFAULT_UPLOAD_WIDTH });
     setError(null);
   };
 
@@ -253,7 +286,14 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
         fileName: file.name,
         fileSize: file.size,
         mime: file.type,
+        width: undefined,
+        height: undefined,
+        imageWidth: undefined,
+        imageHeight: undefined,
+        videoWidth: undefined,
+        videoHeight: undefined,
       });
+      setSize({ w: DEFAULT_UPLOAD_WIDTH });
     } catch (e: any) {
       setError(e?.message || '上传失败');
     } finally {
@@ -384,7 +424,7 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
           </button>
         </div>
         <div
-          className="imade-image-meta nodrag nopan pointer-events-none absolute left-1/2 z-[185] max-w-[320px] truncate rounded-full px-2.5 py-1 text-[11px]"
+          className="imade-image-meta nodrag nopan pointer-events-none absolute left-1/2 z-[185] max-w-[420px] truncate rounded-full px-3 py-1 text-[13px] leading-[18px]"
           style={{
             top: `${-15 / stableMenuZoom}px`,
             transform: `translateX(-50%) scale(${stableMenuScale})`,
@@ -456,6 +496,7 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
             accent={handleColor}
             onResize={(_e, p) => {
               setSize({ w: p.width, h: p.height });
+              update({ width: Math.round(p.width), height: Math.round(p.height) });
               refreshNodeInternals();
             }}
           />
@@ -477,6 +518,7 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
               const img = e.currentTarget;
               if (img.naturalWidth > 0 && img.naturalHeight > 0) {
                 setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+                syncSizeFromMedia(img.naturalWidth, img.naturalHeight, 'image');
               }
               refreshNodeInternals();
             }}
@@ -505,7 +547,11 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
             data-drag-url={url}
             data-drag-preview={url}
             data-drag-node-id={id}
-            onLoadedMetadata={refreshNodeInternals}
+            onLoadedMetadata={(e) => {
+              const video = e.currentTarget;
+              syncSizeFromMedia(video.videoWidth, video.videoHeight, 'video');
+              refreshNodeInternals();
+            }}
             onMouseDown={(e) =>
               beginMaterialDrag(e, { kind: 'video', url, sourceNodeId: id, previewUrl: url })
             }
@@ -569,6 +615,7 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
               const img = e.currentTarget;
               if (img.naturalWidth > 0 && img.naturalHeight > 0) {
                 setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+                syncSizeFromMedia(img.naturalWidth, img.naturalHeight, 'image');
               }
               refreshNodeInternals();
             }}
@@ -596,7 +643,11 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
             data-drag-url={url}
             data-drag-preview={url}
             data-drag-node-id={id}
-            onLoadedMetadata={refreshNodeInternals}
+            onLoadedMetadata={(e) => {
+              const video = e.currentTarget;
+              syncSizeFromMedia(video.videoWidth, video.videoHeight, 'video');
+              refreshNodeInternals();
+            }}
             onMouseDown={(e) =>
               beginMaterialDrag(e, { kind: 'video', url, sourceNodeId: id, previewUrl: url })
             }
@@ -638,7 +689,7 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
       {/* 四角同比例缩放 (仅选中时出现) — 主题色跟随上传类型的端口色 */}
       {selected && url && uploadType && meta && (
         <div className="pointer-events-none absolute -top-8 left-0 right-0 z-30 flex items-center justify-between gap-2">
-          <div className={`min-w-0 flex-1 truncate rounded-full border px-2 py-1 text-[10px] shadow-lg backdrop-blur ${
+          <div className={`min-w-0 flex-1 truncate rounded-full border px-2.5 py-1 text-[13px] leading-[18px] shadow-lg backdrop-blur ${
             isDark ? 'border-white/10 bg-zinc-950/88 text-white/70' : 'border-black/10 bg-white/92 text-zinc-600'
           }`}>
             {fileSize > 0 ? `${mediaInfo} · ${(fileSize / 1024).toFixed(1)} KB` : mediaInfo}
@@ -668,6 +719,7 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
         accent={handleColor}
         onResize={(_e, p) => {
           setSize({ w: p.width, h: p.height });
+          update({ width: Math.round(p.width), height: Math.round(p.height) });
           refreshNodeInternals();
         }}
       />
@@ -817,7 +869,14 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
                 data-drag-url={url}
                 data-drag-preview={url}
                 data-drag-node-id={id}
-                onLoad={refreshNodeInternals}
+                onLoad={(e) => {
+                  const img = e.currentTarget;
+                  if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                    setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+                    syncSizeFromMedia(img.naturalWidth, img.naturalHeight, 'image');
+                  }
+                  refreshNodeInternals();
+                }}
                 onClick={(e) =>
                   handleCanvasReferenceSourceClick(e, { kind: 'image', url, sourceNodeId: id, previewUrl: url })
                 }
@@ -844,7 +903,11 @@ const UploadNode = ({ id, data, selected }: NodeProps) => {
                 data-drag-url={url}
                 data-drag-preview={url}
                 data-drag-node-id={id}
-                onLoadedMetadata={refreshNodeInternals}
+                onLoadedMetadata={(e) => {
+                  const video = e.currentTarget;
+                  syncSizeFromMedia(video.videoWidth, video.videoHeight, 'video');
+                  refreshNodeInternals();
+                }}
                 onMouseDown={(e) =>
                   beginMaterialDrag(e, { kind: 'video', url, sourceNodeId: id, previewUrl: url })
                 }

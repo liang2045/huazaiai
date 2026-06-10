@@ -1,5 +1,5 @@
 import { memo, useEffect, useState, type CSSProperties } from 'react';
-import { Handle, NodeResizeControl, Position, type NodeProps, type ResizeParams } from '@xyflow/react';
+import { Handle, NodeResizeControl, Position, useViewport, type NodeProps, type ResizeParams } from '@xyflow/react';
 import { Frame } from 'lucide-react';
 import { useUpdateNodeData } from './useUpdateNodeData';
 import { useThemeStore } from '../../stores/theme';
@@ -18,12 +18,44 @@ const PREVIOUS_DEFAULT_H = 800;
 const LARGE_DEFAULT_W = 12000;
 const LARGE_DEFAULT_H = 8000;
 const RESIZE_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const;
+const clampPercent = (value: unknown, fallback = 100) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(100, parsed));
+};
+const colorWithAlpha = (color: string, alphaPercent: unknown = 100) => {
+  const alpha = clampPercent(alphaPercent) / 100;
+  const value = color || '#111111';
+  const short = /^#([0-9a-f]{3})$/i.exec(value.trim());
+  const long = /^#([0-9a-f]{6})$/i.exec(value.trim());
+  if (!short && !long) return value;
+  const raw = short ? short[1].split('').map((ch) => ch + ch).join('') : long![1];
+  const r = parseInt(raw.slice(0, 2), 16);
+  const g = parseInt(raw.slice(2, 4), 16);
+  const b = parseInt(raw.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${Number(alpha.toFixed(3))})`;
+};
+type GradientStop = { id?: string; color?: string; alpha?: number; position?: number };
+type NormalizedGradientStop = { color: string; alpha: number; position: number };
 const makeBackground = (d: any) => {
   if (d?.backgroundMode === 'gradient') {
-    const from = d?.backgroundGradientFrom || '#ffffff';
-    const to = d?.backgroundGradientTo || '#dbeafe';
+    const solid = d?.backgroundColor || '#ffffff';
+    const fallback = [
+      { color: d?.backgroundGradientFrom || solid, alpha: clampPercent(d?.backgroundGradientFromAlpha ?? 100), position: 0 },
+      { color: d?.backgroundGradientMiddle || d?.backgroundGradientFrom || solid, alpha: clampPercent(d?.backgroundGradientMiddleAlpha ?? 100), position: 50 },
+      { color: d?.backgroundGradientTo || '#dbeafe', alpha: clampPercent(d?.backgroundGradientToAlpha ?? 100), position: 100 },
+    ];
+    const raw = Array.isArray(d?.backgroundGradientStops) ? d.backgroundGradientStops : fallback;
+    const stops = raw
+      .map((stop: GradientStop, index: number) => ({
+        color: String(stop?.color || fallback[index]?.color || solid),
+        alpha: clampPercent(stop?.alpha ?? fallback[index]?.alpha ?? 100),
+        position: clampPercent(stop?.position ?? fallback[index]?.position ?? (index === 0 ? 0 : 100)),
+      } satisfies NormalizedGradientStop))
+      .sort((a: NormalizedGradientStop, b: NormalizedGradientStop) => a.position - b.position);
+    const usable: NormalizedGradientStop[] = stops.length >= 2 ? stops : fallback;
     const angle = Number(d?.backgroundGradientAngle ?? 90);
-    return `linear-gradient(${Number.isFinite(angle) ? angle : 90}deg, ${from}, ${to})`;
+    return `linear-gradient(${Number.isFinite(angle) ? angle : 90}deg, ${usable.map((stop: NormalizedGradientStop) => `${colorWithAlpha(stop.color, stop.alpha)} ${stop.position}%`).join(', ')})`;
   }
   return d?.backgroundColor || 'rgba(128,128,128,.12)';
 };
@@ -37,6 +69,7 @@ const shouldUpgradeDefaultFrame = (w: number, h: number) =>
 
 const DrawingBoardNode = (p: NodeProps) => {
   const update = useUpdateNodeData(p.id);
+  const { zoom: viewportZoom } = useViewport();
   const { theme, style } = useThemeStore();
   const handleThemeClass = style === 'pixel'
     ? `imade-frame-resize-handle--pixel-${theme === 'dark' ? 'dark' : 'light'}`
@@ -51,6 +84,12 @@ const DrawingBoardNode = (p: NodeProps) => {
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(frameName);
   const [frameSize, setFrameSize] = useState(initialFrame);
+  const sizeLabel = `${frameSize.w}×${frameSize.h}`;
+  const displayName = !frameName || /^画框$|^\d+\s*[×x]\s*\d+$/i.test(frameName)
+    ? sizeLabel
+    : `${frameName} · ${sizeLabel}`;
+  const stableOverlayZoom = Math.max(viewportZoom || 1, 0.01);
+  const stableOverlayScale = Math.min(24, Math.max(1, 1 / stableOverlayZoom));
 
   useEffect(() => {
     const next = shouldUpgradeDefaultFrame(rawFrameW, rawFrameH)
@@ -70,7 +109,7 @@ const DrawingBoardNode = (p: NodeProps) => {
       h: Math.max(MIN_H, Math.round(params.height)),
     };
     setFrameSize(next);
-    update({ frameW: next.w, frameH: next.h });
+    update({ frameW: next.w, frameH: next.h, resolutionW: next.w, resolutionH: next.h });
   };
 
   const commitName = () => {
@@ -93,10 +132,15 @@ const DrawingBoardNode = (p: NodeProps) => {
       }}
     >
       <div
-        className="absolute left-0 top-[-28px] z-30 flex h-6 max-w-full items-center gap-1.5 text-[11px] font-medium"
+        className="absolute left-0 z-30 flex h-7 max-w-full items-center gap-1.5 text-[13px] font-medium leading-[18px]"
         title="长按名称可移动画框，双击可修改名称"
+        style={{
+          top: `${-30 / stableOverlayZoom}px`,
+          transform: `scale(${stableOverlayScale})`,
+          transformOrigin: 'top left',
+        }}
       >
-        <Frame size={12} className="shrink-0 text-zinc-500 dark:text-white/55" />
+        <Frame size={14} className="shrink-0 text-zinc-500 dark:text-white/65" />
         {editingName ? (
           <input
             autoFocus
@@ -116,14 +160,14 @@ const DrawingBoardNode = (p: NodeProps) => {
         ) : (
           <button
             type="button"
-            className="max-w-[220px] truncate text-left text-zinc-700 dark:text-white/75"
+            className="max-w-[260px] truncate text-left text-[13px] leading-[18px] text-zinc-700 dark:text-white/85"
             onDoubleClick={(e) => {
               e.stopPropagation();
               setDraftName(frameName);
               setEditingName(true);
             }}
           >
-            {frameName}
+            {displayName}
           </button>
         )}
       </div>

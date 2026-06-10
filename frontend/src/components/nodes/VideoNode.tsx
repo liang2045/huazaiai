@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react';
+import { Handle, Position, useReactFlow, useViewport, type NodeProps } from '@xyflow/react';
 import { AlertCircle, Download, Loader2, RotateCcw, Video as VideoIcon, Sparkles, Square, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { VIDEO_MODELS, isFalVideoModel, VIDEO_FAL_REGISTRY, VEO_FAL_RATIOS, VEO_FAL_DURATIONS, VEO_FAL_RESOLUTIONS, GROK_FAL_RATIOS, GROK_FAL_RESOLUTIONS } from '../../providers/models';
 import { submitVideo, queryVideo, submitVideoFal, queryVideoFal, type VideoSubmitRequest, type VideoFalSubmitRequest } from '../../services/generation';
@@ -15,6 +15,23 @@ import { useDragMaterialStore, type MaterialPayload } from '../../stores/dragMat
 import { useMaterialDropTarget } from '../../hooks/useMaterialDropTarget';
 import { downloadAsset } from '../../utils/download';
 
+const parseRatio = (value: string | undefined, fallback = '16:9') => {
+  const raw = String(value || fallback);
+  const match = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(raw);
+  if (!match) return { w: 16, h: 9 };
+  const w = Number(match[1]);
+  const h = Number(match[2]);
+  return w > 0 && h > 0 ? { w, h } : { w: 16, h: 9 };
+};
+
+const videoSizeFromConfig = (ratio: string | undefined, resolution: string | undefined) => {
+  const { w: rw, h: rh } = parseRatio(ratio);
+  const res = String(resolution || '').toLowerCase();
+  const longSide = res.includes('1080') ? 1920 : res.includes('720') ? 1280 : res.includes('480') ? 854 : 1280;
+  if (rw >= rh) return { w: longSide, h: Math.round(longSide * rh / rw) };
+  return { w: Math.round(longSide * rw / rh), h: longSide };
+};
+
 /**
  * VideoNode - 异步视频生成(完全对齐 gpt-image-2-web)
  * 支持:
@@ -27,6 +44,7 @@ const VideoNode = ({ id, data, selected }: NodeProps) => {
   const update = useUpdateNodeData(id);
   const hasAutoOutput = useHasAutoOutput(id);
   const { getEdges, getNodes } = useReactFlow();
+  const { zoom: viewportZoom } = useViewport();
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const pollTimer = useRef<number | null>(null);
@@ -74,6 +92,8 @@ const VideoNode = ({ id, data, selected }: NodeProps) => {
   const status: 'idle' | 'submitting' | 'polling' | 'success' | 'error' = d?.status || 'idle';
   const taskId: string | undefined = d?.taskId;
   const videoUrl: string | undefined = d?.videoUrl;
+  const videoWidth = Number(d?.videoWidth || d?.width || 0);
+  const videoHeight = Number(d?.videoHeight || d?.height || 0);
   const progress: string = d?.progress || '';
   const localPrompt: string = d?.prompt || '';
 
@@ -378,6 +398,22 @@ const VideoNode = ({ id, data, selected }: NodeProps) => {
   const mediaInfo = isFal
     ? (falReg?.paramKind === 'veo-fal' ? `${vfRatio} · ${vfResolution}` : `${gkfRatio} · ${gkfResolution}`)
     : `${ratio} · ${resolution || modelDef.defaultResolution || 'auto'}`;
+  const configVideoSize = videoSizeFromConfig(
+    isFal ? (falReg?.paramKind === 'veo-fal' ? vfRatio : gkfRatio) : ratio,
+    isFal ? (falReg?.paramKind === 'veo-fal' ? vfResolution : gkfResolution) : (resolution || modelDef.defaultResolution),
+  );
+  const videoFrameStyle = videoWidth > 0 && videoHeight > 0
+    ? { width: videoWidth, height: videoHeight }
+    : { width: configVideoSize.w, height: configVideoSize.h };
+  const stableOverlayZoom = Math.max(viewportZoom || 1, 0.01);
+  const stableOverlayScale = Math.min(24, Math.max(1, 1 / stableOverlayZoom));
+  const syncVideoSize = (video: HTMLVideoElement) => {
+    const w = video.videoWidth || 0;
+    const h = video.videoHeight || 0;
+    if (w > 0 && h > 0 && (w !== videoWidth || h !== videoHeight)) {
+      update({ videoWidth: w, videoHeight: h, width: w, height: h });
+    }
+  };
   const mediaActionClass = `flex h-7 w-7 items-center justify-center rounded-full border shadow-lg backdrop-blur transition ${
     isDark
       ? 'border-white/10 bg-zinc-950/88 text-white/80 hover:bg-zinc-900 hover:text-white'
@@ -389,11 +425,18 @@ const VideoNode = ({ id, data, selected }: NodeProps) => {
       <div
         {...dropProps}
         onClickCapture={() => setMenuOpen(true)}
-        className="group relative mt-8 w-[300px] bg-transparent"
-        style={{ aspectRatio: ratio?.includes(':') ? ratio.replace(':', '/') : '16 / 9' }}
+        className="group relative mt-8 bg-transparent"
+        style={videoFrameStyle}
       >
-        <div className="pointer-events-none absolute -top-8 left-0 right-0 z-20 flex items-center justify-between opacity-0 transition-opacity group-hover:opacity-100">
-          <div className={`rounded-full border px-2 py-1 text-[10px] shadow-lg backdrop-blur ${
+        <div
+          className="pointer-events-none absolute left-0 right-0 z-20 flex items-center justify-between opacity-0 transition-opacity group-hover:opacity-100"
+          style={{
+            top: `${-32 / stableOverlayZoom}px`,
+            transform: `scale(${stableOverlayScale})`,
+            transformOrigin: 'top left',
+          }}
+        >
+          <div className={`rounded-full border px-2.5 py-1 text-[13px] leading-[18px] shadow-lg backdrop-blur ${
             isDark ? 'border-white/10 bg-zinc-950/88 text-white/65' : 'border-black/10 bg-white/92 text-zinc-600'
           }`}>
             {mediaInfo}
@@ -418,6 +461,7 @@ const VideoNode = ({ id, data, selected }: NodeProps) => {
           data-drag-url={videoUrl}
           data-drag-preview={videoUrl}
           data-drag-node-id={id}
+          onLoadedMetadata={(e) => syncVideoSize(e.currentTarget)}
           onMouseDown={(e) => beginMaterialDrag(e, { kind: 'video', url: videoUrl!, sourceNodeId: id, previewUrl: videoUrl! })}
         />
       </div>
@@ -428,8 +472,9 @@ const VideoNode = ({ id, data, selected }: NodeProps) => {
     <div
       {...dropProps}
       onClickCapture={() => setMenuOpen(true)}
-      className="group relative mt-8 w-[300px] rounded-none bg-transparent transition-all"
+      className="group relative mt-8 rounded-none bg-transparent transition-all"
       style={{
+        ...videoFrameStyle,
         background: 'transparent',
         borderRadius: 0,
         outline: 'none',
@@ -440,10 +485,16 @@ const VideoNode = ({ id, data, selected }: NodeProps) => {
       <Handle type="target" position={Position.Left} className={`!bg-rose-400 !border-0 ${handleVisibilityClass}`} />
       <Handle type="source" position={Position.Right} className={`!bg-rose-400 !border-0 ${handleVisibilityClass}`} />
 
-      <div className={`pointer-events-none absolute -top-8 left-0 right-0 z-20 flex items-center justify-between transition-opacity ${
+      <div className={`pointer-events-none absolute left-0 right-0 z-20 flex items-center justify-between transition-opacity ${
         selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-      }`}>
-        <div className={`rounded-full border px-2 py-1 text-[10px] shadow-lg backdrop-blur ${
+      }`}
+        style={{
+          top: `${-32 / stableOverlayZoom}px`,
+          transform: `scale(${stableOverlayScale})`,
+          transformOrigin: 'top left',
+        }}
+      >
+        <div className={`rounded-full border px-2.5 py-1 text-[13px] leading-[18px] shadow-lg backdrop-blur ${
           isDark ? 'border-white/10 bg-zinc-950/88 text-white/65' : 'border-black/10 bg-white/92 text-zinc-600'
         }`}>
           {mediaInfo}
@@ -459,8 +510,8 @@ const VideoNode = ({ id, data, selected }: NodeProps) => {
       </div>
 
       <div
-        className={`${isDark ? 'bg-zinc-950/70' : 'bg-zinc-100'} block w-full overflow-hidden text-left`}
-        style={{ aspectRatio: ratio?.includes(':') ? ratio.replace(':', '/') : '16 / 9' }}
+        className={`${isDark ? 'bg-zinc-950/70' : 'bg-zinc-100'} block h-full w-full overflow-hidden text-left`}
+        style={{ width: '100%', height: '100%' }}
         
         title="双击打开视频参数"
       >
@@ -477,12 +528,18 @@ const VideoNode = ({ id, data, selected }: NodeProps) => {
             data-drag-url={videoUrl}
             data-drag-preview={videoUrl}
             data-drag-node-id={id}
+            onLoadedMetadata={(e) => syncVideoSize(e.currentTarget)}
             onMouseDown={(e) => beginMaterialDrag(e, { kind: 'video', url: videoUrl, sourceNodeId: id, previewUrl: videoUrl })}
           />
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center text-white/36">
-            {isBusy ? <Loader2 size={22} className="animate-spin" /> : <VideoIcon size={24} />}
-            <span className="mt-2 text-xs">Video</span>
+            <div
+              className="flex flex-col items-center justify-center"
+              style={{ transform: `scale(${stableOverlayScale})`, transformOrigin: 'center center' }}
+            >
+              {isBusy ? <Loader2 size={28} className="animate-spin" /> : <VideoIcon size={32} />}
+              <span className="mt-2 text-[14px] leading-[18px]">Video</span>
+            </div>
           </div>
         )}
       </div>

@@ -108,6 +108,13 @@ struct UploadBase64Body {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportUrlBody {
+    url: Option<String>,
+    file_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct OpenPathBody {
     path: Option<String>,
 }
@@ -160,6 +167,7 @@ async fn main() -> Result<()> {
         .route("/api/proxy/image/status/{task_id}", get(proxy_image_status))
         .route("/api/files/upload", post(upload_file))
         .route("/api/files/upload-base64", post(upload_base64))
+        .route("/api/files/import-url", post(import_url))
         .route("/api/files/list", get(list_output_files))
         .route("/api/files/thumbnail", get(thumbnail))
         .route("/api/files/download-to-directory", post(download_to_directory))
@@ -701,6 +709,93 @@ async fn upload_base64(
             "filename": filename,
             "url": format!("/files/output/{filename}"),
             "size": bytes.len()
+        }
+    })))
+}
+
+async fn import_url(
+    State(state): State<AppState>,
+    Json(body): Json<ImportUrlBody>,
+) -> Result<Json<Value>, AppError> {
+    let raw_url = body.url.ok_or_else(|| AppError::bad_request("missing url"))?;
+    let parsed = reqwest::Url::parse(raw_url.trim())
+        .map_err(|_| AppError::bad_request("invalid url"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(AppError::bad_request("only http/https media urls are supported"));
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(parsed.clone())
+        .header(reqwest::header::USER_AGENT, "iMade/0.1 media-import")
+        .send()
+        .await
+        .map_err(AppError::internal)?;
+    if !resp.status().is_success() {
+        return Err(AppError::bad_request(format!("remote download failed: {}", resp.status())));
+    }
+    let header_mime = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(|v| v.trim().to_lowercase())
+        .unwrap_or_default();
+    let bytes = resp.bytes().await.map_err(AppError::internal)?.to_vec();
+    if bytes.is_empty() {
+        return Err(AppError::bad_request("remote file is empty"));
+    }
+    if bytes.len() > 300 * 1024 * 1024 {
+        return Err(AppError::bad_request("remote file is too large"));
+    }
+
+    let path_ext = parsed
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .and_then(|name| Path::new(name).extension())
+        .and_then(|v| v.to_str())
+        .unwrap_or("");
+    let guessed_mime = if header_mime.is_empty() {
+        mime_guess::from_ext(path_ext).first_raw().unwrap_or("").to_owned()
+    } else {
+        header_mime.clone()
+    };
+    let (mime, ext, upload_type) = detect_media_bytes(&bytes)
+        .or_else(|| media_type_from_mime_or_ext(&guessed_mime, path_ext))
+        .ok_or_else(|| AppError::bad_request("remote url is not a supported image/video"))?;
+
+    let original = body
+        .file_name
+        .or_else(|| {
+            parsed
+                .path_segments()
+                .and_then(|mut segments| segments.next_back())
+                .map(|v| v.to_owned())
+        })
+        .unwrap_or_else(|| format!("import.{}", ext));
+    let original_stem = Path::new(&original)
+        .file_stem()
+        .and_then(|v| v.to_str())
+        .map(safe_file_name)
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "external".to_owned());
+    let filename = format!(
+        "url_{}_{}_{}.{}",
+        now_ms(),
+        random_suffix(4),
+        original_stem.chars().take(24).collect::<String>(),
+        safe_ext(ext)
+    );
+    let path = state.config.input_dir.join(&filename);
+    tokio::fs::write(&path, &bytes).await.map_err(AppError::internal)?;
+    Ok(Json(json!({
+        "success": true,
+        "data": {
+            "filename": filename,
+            "url": format!("/files/input/{filename}"),
+            "size": bytes.len(),
+            "mime": mime,
+            "uploadType": upload_type
         }
     })))
 }
@@ -1924,6 +2019,72 @@ fn detect_image_bytes(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
         return Some(("image/gif", "gif"));
     }
     None
+}
+
+fn detect_media_bytes(bytes: &[u8]) -> Option<(&'static str, &'static str, &'static str)> {
+    if let Some((mime, ext)) = detect_image_bytes(bytes) {
+        return Some((mime, ext, "image"));
+    }
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
+        return Some(("video/mp4", "mp4", "video"));
+    }
+    if bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
+        return Some(("video/webm", "webm", "video"));
+    }
+    None
+}
+
+fn media_type_from_mime_or_ext(mime: &str, ext: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    let mime = mime.to_lowercase();
+    let ext = safe_ext(ext).to_lowercase();
+    if mime.starts_with("image/") {
+        return match mime.as_str() {
+            "image/jpeg" | "image/jpg" => Some(("image/jpeg", "jpg", "image")),
+            "image/png" => Some(("image/png", "png", "image")),
+            "image/webp" => Some(("image/webp", "webp", "image")),
+            "image/gif" => Some(("image/gif", "gif", "image")),
+            "image/bmp" => Some(("image/bmp", "bmp", "image")),
+            _ => match ext.as_str() {
+                "jpg" | "jpeg" => Some(("image/jpeg", "jpg", "image")),
+                "png" => Some(("image/png", "png", "image")),
+                "webp" => Some(("image/webp", "webp", "image")),
+                "gif" => Some(("image/gif", "gif", "image")),
+                "bmp" => Some(("image/bmp", "bmp", "image")),
+                _ => None,
+            },
+        };
+    }
+    if mime.starts_with("video/") {
+        return match mime.as_str() {
+            "video/mp4" => Some(("video/mp4", "mp4", "video")),
+            "video/webm" => Some(("video/webm", "webm", "video")),
+            "video/quicktime" => Some(("video/quicktime", "mov", "video")),
+            "video/x-m4v" => Some(("video/x-m4v", "m4v", "video")),
+            _ => match ext.as_str() {
+                "mp4" => Some(("video/mp4", "mp4", "video")),
+                "webm" => Some(("video/webm", "webm", "video")),
+                "mov" => Some(("video/quicktime", "mov", "video")),
+                "m4v" => Some(("video/x-m4v", "m4v", "video")),
+                "avi" => Some(("video/x-msvideo", "avi", "video")),
+                "mkv" => Some(("video/x-matroska", "mkv", "video")),
+                _ => None,
+            },
+        };
+    }
+    match ext.as_str() {
+        "jpg" | "jpeg" => Some(("image/jpeg", "jpg", "image")),
+        "png" => Some(("image/png", "png", "image")),
+        "webp" => Some(("image/webp", "webp", "image")),
+        "gif" => Some(("image/gif", "gif", "image")),
+        "bmp" => Some(("image/bmp", "bmp", "image")),
+        "mp4" => Some(("video/mp4", "mp4", "video")),
+        "webm" => Some(("video/webm", "webm", "video")),
+        "mov" => Some(("video/quicktime", "mov", "video")),
+        "m4v" => Some(("video/x-m4v", "m4v", "video")),
+        "avi" => Some(("video/x-msvideo", "avi", "video")),
+        "mkv" => Some(("video/x-matroska", "mkv", "video")),
+        _ => None,
+    }
 }
 
 fn percent_decode(value: &str) -> String {

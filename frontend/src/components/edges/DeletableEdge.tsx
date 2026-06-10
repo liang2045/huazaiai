@@ -74,6 +74,12 @@ export default function DeletableEdge(props: EdgeProps) {
           pointerEvents="none"
         />
       )}
+      {flowActive && (
+        <>
+          <circle className="imade-edge-end-pulse" cx={sourceX} cy={sourceY} r={4.5} pointerEvents="none" />
+          <circle className="imade-edge-end-pulse imade-edge-end-pulse--target" cx={targetX} cy={targetY} r={4.5} pointerEvents="none" />
+        </>
+      )}
       <path
         d={edgePath}
         fill="none"

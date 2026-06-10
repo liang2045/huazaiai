@@ -1,5 +1,5 @@
 ﻿import { memo, useEffect, useRef, useState } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Handle, Position, useViewport, type NodeProps } from '@xyflow/react';
 import { AlertCircle, Download, Loader2, Film, RotateCcw, Sparkles, Square, X, ZoomIn, ZoomOut } from 'lucide-react';
 import {
   submitSeedance,
@@ -41,10 +41,26 @@ const MODEL_OPTIONS = [
 const RATIO_OPTIONS = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '9:21', 'adaptive'];
 const RESOLUTION_OPTIONS = ['480p', '720p', 'native1080p', '1080p', '2k', '4k'];
 const DURATION_OPTIONS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+const parseRatio = (value: string | undefined, fallback = '16:9') => {
+  const raw = String(value || fallback);
+  const match = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(raw);
+  if (!match) return { w: 16, h: 9 };
+  const w = Number(match[1]);
+  const h = Number(match[2]);
+  return w > 0 && h > 0 ? { w, h } : { w: 16, h: 9 };
+};
+const seedanceSizeFromConfig = (ratio: string | undefined, resolution: string | undefined) => {
+  const { w: rw, h: rh } = parseRatio(ratio);
+  const res = String(resolution || '').toLowerCase();
+  const longSide = res.includes('4k') ? 3840 : res.includes('2k') ? 2048 : res.includes('1080') ? 1920 : res.includes('480') ? 854 : 1280;
+  if (rw >= rh) return { w: longSide, h: Math.round((longSide * rh) / rw) };
+  return { w: Math.round((longSide * rw) / rh), h: longSide };
+};
 
 const SeedanceNode = ({ id, data, selected }: NodeProps) => {
   const update = useUpdateNodeData(id);
   const hasAutoOutput = useHasAutoOutput(id);
+  const { zoom: viewportZoom } = useViewport();
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -64,7 +80,7 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
   const model: string = d.model || MODEL_OPTIONS[0].value;
   const duration: number = typeof d.duration === 'number' ? d.duration : 5;
   const ratio: string = d.ratio || '16:9';
-  const resolution: string = d.resolution || '480p';
+  const resolution: string = d.resolution || '720p';
   const generateAudio: boolean = d.generateAudio !== false; // 榛樿 true
   const returnLastFrame: boolean = d.returnLastFrame === true;
   const watermark: boolean = d.watermark === true;
@@ -78,6 +94,8 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
   const status: 'idle' | 'submitting' | 'polling' | 'success' | 'error' = d.status || 'idle';
   const taskId: string | undefined = d.taskId;
   const videoUrl: string | undefined = d.videoUrl;
+  const videoWidth = Number(d.videoWidth || d.width || 0);
+  const videoHeight = Number(d.videoHeight || d.height || 0);
   const progress: string = d.progress || '';
   const localPrompt: string = d.prompt || '';
 
@@ -296,6 +314,19 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
   const layerOnly = hasVideoResult && !selected;
   const handleVisibilityClass = selected ? '!opacity-100' : '!opacity-0 !pointer-events-none';
   const mediaInfo = `${ratio} · ${resolution}`;
+  const configVideoSize = seedanceSizeFromConfig(ratio, resolution);
+  const videoFrameStyle = videoWidth > 0 && videoHeight > 0
+    ? { width: videoWidth, height: videoHeight }
+    : { width: configVideoSize.w, height: configVideoSize.h };
+  const stableOverlayZoom = Math.max(viewportZoom || 1, 0.01);
+  const stableOverlayScale = Math.min(24, Math.max(1, 1 / stableOverlayZoom));
+  const syncVideoSize = (video: HTMLVideoElement) => {
+    const w = video.videoWidth || 0;
+    const h = video.videoHeight || 0;
+    if (w > 0 && h > 0 && (w !== videoWidth || h !== videoHeight)) {
+      update({ videoWidth: w, videoHeight: h, width: w, height: h });
+    }
+  };
   const mediaActionClass = `flex h-7 w-7 items-center justify-center rounded-full border shadow-lg backdrop-blur transition ${
     isDark
       ? 'border-white/10 bg-zinc-950/88 text-white/80 hover:bg-zinc-900 hover:text-white'
@@ -307,14 +338,21 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
       <div
         {...dropProps}
         onClickCapture={() => setMenuOpen(true)}
-        className="group relative mt-8 w-[300px] overflow-visible rounded-none bg-transparent"
-        style={{ aspectRatio: ratio && ratio !== 'adaptive' && ratio.includes(':') ? ratio.replace(':', '/') : '16 / 9' }}
+        className="group relative mt-8 overflow-visible rounded-none bg-transparent"
+        style={videoFrameStyle}
       >
         <Handle type="target" position={Position.Left} className="!bg-fuchsia-400 !border-0 !opacity-0 !pointer-events-none" />
         <Handle type="source" position={Position.Right} className="!bg-fuchsia-400 !border-0 !opacity-0 !pointer-events-none" />
-        <div className="pointer-events-none absolute -top-9 left-0 right-0 z-20 flex items-center justify-between gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+        <div
+          className="pointer-events-none absolute left-0 right-0 z-20 flex items-center justify-between gap-2 opacity-0 transition-opacity group-hover:opacity-100"
+          style={{
+            top: `${-36 / stableOverlayZoom}px`,
+            transform: `scale(${stableOverlayScale})`,
+            transformOrigin: 'top left',
+          }}
+        >
           <span
-            className={`max-w-[170px] truncate rounded-full border px-2 py-1 text-[10px] shadow-sm backdrop-blur ${
+            className={`max-w-[220px] truncate rounded-full border px-2.5 py-1 text-[13px] leading-[18px] shadow-sm backdrop-blur ${
               isDark ? 'border-white/10 bg-zinc-950/88 text-white/70' : 'border-black/10 bg-white/92 text-zinc-600'
             }`}
           >
@@ -346,6 +384,7 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
           data-drag-preview={videoUrl}
           data-drag-node-id={id}
           onDragStart={(e) => e.preventDefault()}
+          onLoadedMetadata={(e) => syncVideoSize(e.currentTarget)}
           onMouseDown={(e) => beginMaterialDrag(e, { kind: 'video', url: videoUrl!, sourceNodeId: id, previewUrl: videoUrl! })}
         />
       </div>
@@ -356,8 +395,9 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
     <div
       {...dropProps}
       onClickCapture={() => setMenuOpen(true)}
-      className="group relative mt-8 w-[300px] overflow-visible rounded-none bg-transparent transition-all"
+      className="group relative mt-8 overflow-visible rounded-none bg-transparent transition-all"
       style={{
+        ...videoFrameStyle,
         background: 'transparent',
         borderRadius: 0,
         outline: 'none',
@@ -369,11 +409,17 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
       <Handle type="source" position={Position.Right} className={`!bg-fuchsia-400 !border-0 ${handleVisibilityClass}`} />
 
       {videoUrl && (
-        <div className={`pointer-events-none absolute -top-9 left-0 right-0 z-20 flex items-center justify-between gap-2 transition-opacity ${
+        <div className={`pointer-events-none absolute left-0 right-0 z-20 flex items-center justify-between gap-2 transition-opacity ${
           selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-        }`}>
+        }`}
+          style={{
+            top: `${-36 / stableOverlayZoom}px`,
+            transform: `scale(${stableOverlayScale})`,
+            transformOrigin: 'top left',
+          }}
+        >
           <span
-            className={`max-w-[170px] truncate rounded-full border px-2 py-1 text-[10px] shadow-sm backdrop-blur ${
+            className={`max-w-[220px] truncate rounded-full border px-2.5 py-1 text-[13px] leading-[18px] shadow-sm backdrop-blur ${
               isDark ? 'border-white/10 bg-zinc-950/88 text-white/70' : 'border-black/10 bg-white/92 text-zinc-600'
             }`}
           >
@@ -398,7 +444,7 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
 
       <div
         className={`block w-full overflow-hidden text-left ${isDark ? 'bg-zinc-950/70' : 'bg-zinc-100/80'}`}
-        style={{ aspectRatio: ratio && ratio !== 'adaptive' && ratio.includes(':') ? ratio.replace(':', '/') : '16 / 9' }}
+        style={{ width: '100%', height: '100%' }}
         title="点击打开 SD2.0 设置"
       >
         {videoUrl ? (
@@ -414,12 +460,18 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
             data-drag-preview={videoUrl}
             data-drag-node-id={id}
             onDragStart={(e) => e.preventDefault()}
+            onLoadedMetadata={(e) => syncVideoSize(e.currentTarget)}
             onMouseDown={(e) => beginMaterialDrag(e, { kind: 'video', url: videoUrl, sourceNodeId: id, previewUrl: videoUrl })}
           />
         ) : (
           <div className={`flex h-full w-full flex-col items-center justify-center ${isDark ? 'text-white/36' : 'text-zinc-400'}`}>
-            {isBusy ? <Loader2 size={22} className="animate-spin" /> : <Film size={24} />}
-            <span className="mt-2 text-xs">SD2.0</span>
+            <div
+              className="flex flex-col items-center justify-center"
+              style={{ transform: `scale(${stableOverlayScale})`, transformOrigin: 'center center' }}
+            >
+              {isBusy ? <Loader2 size={28} className="animate-spin" /> : <Film size={32} />}
+              <span className="mt-2 text-[14px] leading-[18px]">SD2.0</span>
+            </div>
           </div>
         )}
       </div>

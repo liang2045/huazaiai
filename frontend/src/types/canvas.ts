@@ -107,14 +107,14 @@ export interface CanvasData {
 export interface ApiSettings {
   // 三套通用 Key
   zhenzhenApiKey: string;
-  zhenzhenBaseUrl: string; // 锁定 https://ai.t8star.org
+  zhenzhenBaseUrl: string;
   rhApiKey: string;
   rhBaseUrl: string; // https://www.runninghub.cn
   // RH 钱包应用专用 APIKEY（RH 企业级共享 APIKEY）——
   // 仅供 runninghub-wallet 节点提交使用，不会被默认 RunningHub 节点调用
   rhWalletApiKey: string;
   llmApiKey: string;
-  llmBaseUrl: string; // 锁定 https://ai.t8star.org
+  llmBaseUrl: string;
   // 分类 API Key（留空时 fallback 到 zhenzhenApiKey）
   gptImageApiKey?: string;
   nanoBananaApiKey?: string;

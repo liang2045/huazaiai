@@ -35,7 +35,7 @@ import { useHasAutoOutput } from './useHasAutoOutput';
 import { useRunTrigger } from '../../hooks/useRunTrigger';
 import { useThemeStore } from '../../stores/theme';
 import { logBus } from '../../stores/logs';
-import { MATERIAL_DROP_EVENT, useDragMaterialStore, type MaterialPayload } from '../../stores/dragMaterial';
+import { CANVAS_REFERENCE_PICK_EVENT, useDragMaterialStore, type MaterialPayload } from '../../stores/dragMaterial';
 import { useMaterialDropTarget } from '../../hooks/useMaterialDropTarget';
 import { downloadAsset } from '../../utils/download';
 import { useApiKeysStore } from '../../stores/apiKeys';
@@ -48,6 +48,11 @@ const LEGACY_GPT_IMAGE_MODELS = new Set(['gpt-image-2-all-fal']);
 const normalizeImageApiModel = (value: string) => (
   LEGACY_GPT_IMAGE_MODELS.has(value) ? 'gpt-image-2' : value
 );
+const parsePixelSize = (value: string): { w: number; h: number } | null => {
+  const match = /^(\d+)x(\d+)$/i.exec(String(value || '').trim());
+  if (!match) return null;
+  return { w: Number(match[1]), h: Number(match[2]) };
+};
 const clampInt = (value: unknown, min: number, max: number, fallback: number) => {
   const parsed = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -209,6 +214,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
   const stableMenuZoom = Math.max(viewportZoom || 1, 0.01);
   const stableMenuScale = 1 / stableMenuZoom;
   const stableMenuOffset = 10 / stableMenuZoom;
+  const stableOverlayScale = Math.min(24, Math.max(1, stableMenuScale));
   const imageResolutionInfo = hasTrueImageSize ? `${imageWidth}×${imageHeight}` : '';
   const generatedImageName = String(
     d?.imageName ||
@@ -228,6 +234,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
   );
   const generatedImageMeta = `${generatedImageName} · ${imageResolutionInfo || '尺寸读取中'}`;
   const requestedGptImageSize = getGptImagePixelSize(aspectRatio, sizeLevel);
+  const requestedImagePixelSize = parsePixelSize(requestedGptImageSize);
   const standardImageSizeLabel = isGptImageSizeKind(modelDef.paramKind)
     ? `${requestedGptImageSize} · ${falN}张`
     : `${aspectRatio}/${sizeLevel} · ${falN}张`;
@@ -250,10 +257,16 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
     : isFal && falKind === 'nbpro-fal'
       ? `${nbAspect}(${currentSizeLabel})`
       : `${aspectRatio}(${currentSizeLabel})`;
-  const imageFrameStyle = { width: COMPACT_MEDIA_WIDTH };
+  const imageFrameStyle = hasTrueImageSize
+    ? { width: imageWidth, height: imageHeight }
+    : requestedImagePixelSize
+      ? { width: requestedImagePixelSize.w, height: requestedImagePixelSize.h }
+      : { width: COMPACT_MEDIA_WIDTH };
   const imageBodyStyle = hasTrueImageSize
-    ? { aspectRatio: `${imageWidth} / ${imageHeight}`, borderRadius: 0 }
-    : { aspectRatio: aspectRatio?.includes(':') ? aspectRatio.replace(':', '/') : '1 / 1', borderRadius: 0 };
+    ? { width: imageWidth, height: imageHeight, borderRadius: 0 }
+    : requestedImagePixelSize
+      ? { width: requestedImagePixelSize.w, height: requestedImagePixelSize.h, borderRadius: 0 }
+      : { aspectRatio: aspectRatio?.includes(':') ? aspectRatio.replace(':', '/') : '1 / 1', borderRadius: 0 };
   const syncNaturalImageSize = (img: HTMLImageElement) => {
     const width = img.naturalWidth || 0;
     const height = img.naturalHeight || 0;
@@ -466,7 +479,15 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
     [refImages, id],
   );
   const allImagesUnordered = useMemo(
-    () => [...localImageMaterials, ...upstream.images],
+    () => {
+      const seen = new Set<string>();
+      return [...localImageMaterials, ...upstream.images].filter((m) => {
+        const key = String(m?.url || '');
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    },
     [localImageMaterials, upstream.images],
   );
   const materialOrder: string[] = Array.isArray(d?.materialOrder) ? d.materialOrder : [];
@@ -522,7 +543,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
     void getNodes;
     return {
       prompt: prompts.join('\n').trim(),
-      images: images.slice(0, modelDef.maxReferenceImages),
+      images: images.slice(0, maxRefs),
     };
   };
 
@@ -954,7 +975,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
     if (!referencePickTargetId || payload.kind !== 'image' || !payload.url) return false;
     e.preventDefault();
     e.stopPropagation();
-    window.dispatchEvent(new CustomEvent(MATERIAL_DROP_EVENT, {
+    window.dispatchEvent(new CustomEvent(CANVAS_REFERENCE_PICK_EVENT, {
       detail: { targetNodeId: referencePickTargetId, payload },
     }));
     return true;
@@ -1163,7 +1184,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
           </button>
         </div>
         <div
-          className="imade-image-meta nodrag nopan pointer-events-none absolute left-1/2 z-[185] max-w-[320px] truncate rounded-full px-2.5 py-1 text-[11px]"
+          className="imade-image-meta nodrag nopan pointer-events-none absolute left-1/2 z-[185] max-w-[420px] truncate rounded-full px-3 py-1 text-[13px] leading-[18px]"
           style={{
             top: `${-15 / stableMenuZoom}px`,
             transform: `translateX(-50%) scale(${stableMenuScale})`,
@@ -1268,7 +1289,7 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
         {...dropProps}
       >
         <div className="hidden">
-          <div className={`rounded-full border px-2 py-1 text-[10px] shadow-lg backdrop-blur ${
+          <div className={`rounded-full border px-2.5 py-1 text-[13px] leading-[18px] shadow-lg backdrop-blur ${
             isDark ? 'border-white/10 bg-zinc-950/88 text-white/65' : 'border-black/10 bg-white/92 text-zinc-600'
           }`}>
             {mediaInfo}
@@ -1329,8 +1350,14 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
 
       <div className={`pointer-events-none absolute -top-8 left-0 right-0 z-20 flex items-center justify-between transition-opacity ${
         selected && !imageUrl ? 'opacity-100' : 'opacity-0'
-      }`}>
-        <div className={`rounded-full border px-2 py-1 text-[10px] shadow-lg backdrop-blur ${
+      }`}
+        style={{
+          top: `${-32 / stableMenuZoom}px`,
+          transform: `scale(${stableOverlayScale})`,
+          transformOrigin: 'top left',
+        }}
+      >
+        <div className={`rounded-full border px-2.5 py-1 text-[13px] leading-[18px] shadow-lg backdrop-blur ${
           isDark ? 'border-white/10 bg-zinc-950/88 text-white/65' : 'border-black/10 bg-white/92 text-zinc-600'
         }`}>
           {mediaInfo}
@@ -1381,12 +1408,17 @@ const ImageNode = ({ id, data, selected }: NodeProps) => {
           <div className={`flex h-full w-full flex-col items-center justify-center ${
             isDark ? 'text-white/78' : 'text-zinc-600'
           }`}>
+            <div
+              className="flex flex-col items-center justify-center"
+              style={{ transform: `scale(${stableOverlayScale})`, transformOrigin: 'center center' }}
+            >
             {isGenerating ? (
-              <Loader2 size={22} className="animate-spin text-amber-300" />
+              <Loader2 size={28} className="animate-spin text-amber-300" />
             ) : (
-              <ImageIcon size={24} className={isDark ? 'text-amber-200' : 'text-amber-600'} />
+              <ImageIcon size={32} className={isDark ? 'text-amber-200' : 'text-amber-600'} />
             )}
-            <span className="mt-2 text-xs font-medium">Image</span>
+              <span className="mt-2 text-[14px] font-medium leading-[18px]">Image</span>
+            </div>
           </div>
         )}
       </div>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Cloud, Eye, EyeOff, FolderOpen, KeyRound, Loader2, Lock, RefreshCw, Save, Trash2, X } from 'lucide-react';
-import { useApiKeysStore, FIXED_ZHENZHEN_BASE } from '../stores/apiKeys';
+import { Cloud, Eye, EyeOff, FolderOpen, KeyRound, Loader2, RefreshCw, Save, Trash2, Wifi, X } from 'lucide-react';
+import { useApiKeysStore, DEFAULT_ZHENZHEN_BASE, RH_BASE } from '../stores/apiKeys';
 import { useThemeStore } from '../stores/theme';
 import type { ApiSettings } from '../types/canvas';
 import { apiUrl } from '../services/apiBase';
@@ -19,7 +19,9 @@ type KeyField =
   | 'veoApiKey'
   | 'grokApiKey'
   | 'seedanceApiKey'
-  | 'sunoApiKey';
+  | 'sunoApiKey'
+  | 'rhApiKey'
+  | 'rhWalletApiKey';
 
 interface KeySpec {
   field: KeyField;
@@ -31,6 +33,11 @@ interface KeySpec {
 const COMMON_KEYS: KeySpec[] = [
   { field: 'zhenzhenApiKey', label: '模型服务 API Key', desc: '通用后备，用于图像、视频、音频生成', tone: '#b8ab8d' },
   { field: 'llmApiKey', label: 'LLM 独立 API Key', desc: '用于 LLM / Vision', tone: '#9fb4aa' },
+];
+
+const RH_KEYS: KeySpec[] = [
+  { field: 'rhApiKey', label: 'RunningHub API Key', desc: '用于 RunningHub 工作流节点', tone: '#67e8f9' },
+  { field: 'rhWalletApiKey', label: 'RH 钱包 API Key', desc: '用于 RH 钱包应用节点', tone: '#c4b5fd' },
 ];
 
 const CLASSIFIED_KEYS: KeySpec[] = [
@@ -46,6 +53,7 @@ const CLASSIFIED_KEYS: KeySpec[] = [
 const ALL_FIELDS: KeyField[] = [
   ...COMMON_KEYS.map((k) => k.field),
   ...CLASSIFIED_KEYS.map((k) => k.field),
+  ...RH_KEYS.map((k) => k.field),
 ];
 
 const emptyMap = (): Record<KeyField, string> => ({
@@ -58,6 +66,8 @@ const emptyMap = (): Record<KeyField, string> => ({
   grokApiKey: '',
   seedanceApiKey: '',
   sunoApiKey: '',
+  rhApiKey: '',
+  rhWalletApiKey: '',
 });
 
 const emptyShow = (): Record<KeyField, boolean> => ({
@@ -70,6 +80,8 @@ const emptyShow = (): Record<KeyField, boolean> => ({
   grokApiKey: false,
   seedanceApiKey: false,
   sunoApiKey: false,
+  rhApiKey: false,
+  rhWalletApiKey: false,
 });
 
 type CacheStats = {
@@ -90,6 +102,13 @@ const formatBytes = (value: number) => {
   return `${size.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
 };
 
+const normalizeUrlInput = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  return withProtocol.replace(/\/+$/, '');
+};
+
 export default function ApiSettingsModal({ open, onClose }: ApiSettingsModalProps) {
   const { theme } = useThemeStore();
   const { settings, loading, error, load, save, loaded } = useApiKeysStore();
@@ -97,6 +116,9 @@ export default function ApiSettingsModal({ open, onClose }: ApiSettingsModalProp
 
   const [inputs, setInputs] = useState<Record<KeyField, string>>(emptyMap());
   const [shows, setShows] = useState<Record<KeyField, boolean>>(emptyShow());
+  const [zhenzhenBaseUrl, setZhenzhenBaseUrl] = useState('');
+  const [llmBaseUrl, setLlmBaseUrl] = useState('');
+  const [rhBaseUrl, setRhBaseUrl] = useState('');
   const [sharedFolderPath, setSharedFolderPath] = useState('');
   const [netdiskUrl, setNetdiskUrl] = useState('');
   const [downloadDir, setDownloadDir] = useState('');
@@ -113,13 +135,16 @@ export default function ApiSettingsModal({ open, onClose }: ApiSettingsModalProp
     if (!open) return;
     setInputs(emptyMap());
     setShows(emptyShow());
+    setZhenzhenBaseUrl(settings.zhenzhenBaseUrl || DEFAULT_ZHENZHEN_BASE);
+    setLlmBaseUrl(settings.llmBaseUrl || settings.zhenzhenBaseUrl || DEFAULT_ZHENZHEN_BASE);
+    setRhBaseUrl(settings.rhBaseUrl || RH_BASE);
     setSharedFolderPath(settings.sharedFolderPath || '');
     setNetdiskUrl(settings.netdiskUrl || '');
     setDownloadDir(settings.downloadDir || '');
     setCacheMessage('');
     void loadCacheStats();
     setSaved(false);
-  }, [open, settings.sharedFolderPath, settings.netdiskUrl, settings.downloadDir]);
+  }, [open, settings.zhenzhenBaseUrl, settings.llmBaseUrl, settings.rhBaseUrl, settings.sharedFolderPath, settings.netdiskUrl, settings.downloadDir]);
 
   if (!open) return null;
 
@@ -137,6 +162,18 @@ export default function ApiSettingsModal({ open, onClose }: ApiSettingsModalProp
       const v = inputs[f].trim();
       if (!v) continue;
       (patch as any)[f] = v;
+    }
+    const normalizedZhenzhenBaseUrl = normalizeUrlInput(zhenzhenBaseUrl);
+    const normalizedLlmBaseUrl = normalizeUrlInput(llmBaseUrl);
+    const normalizedRhBaseUrl = normalizeUrlInput(rhBaseUrl);
+    if (normalizedZhenzhenBaseUrl && normalizedZhenzhenBaseUrl !== (settings.zhenzhenBaseUrl || DEFAULT_ZHENZHEN_BASE)) {
+      patch.zhenzhenBaseUrl = normalizedZhenzhenBaseUrl;
+    }
+    if (normalizedLlmBaseUrl && normalizedLlmBaseUrl !== (settings.llmBaseUrl || settings.zhenzhenBaseUrl || DEFAULT_ZHENZHEN_BASE)) {
+      patch.llmBaseUrl = normalizedLlmBaseUrl;
+    }
+    if (normalizedRhBaseUrl && normalizedRhBaseUrl !== (settings.rhBaseUrl || RH_BASE)) {
+      patch.rhBaseUrl = normalizedRhBaseUrl;
     }
     if (sharedFolderPath.trim() !== (settings.sharedFolderPath || '')) {
       patch.sharedFolderPath = sharedFolderPath.trim();
@@ -297,8 +334,30 @@ export default function ApiSettingsModal({ open, onClose }: ApiSettingsModalProp
             />
           </div>
 
-          <div className={`flex items-center gap-1.5 text-[11px] ${hintCls}`}>
-            <Lock size={11} /> Base URL 锁定：{FIXED_ZHENZHEN_BASE}
+          <div className={`rounded-xl border p-3 ${panelCls}`}>
+            <div className={`mb-3 flex items-center gap-2 text-sm font-semibold ${labelCls}`}>
+              <Wifi size={15} /> 模型服务 Base URL
+            </div>
+            <input
+              value={zhenzhenBaseUrl}
+              onChange={(e) => setZhenzhenBaseUrl(e.target.value)}
+              placeholder={DEFAULT_ZHENZHEN_BASE}
+              className={inputCls}
+            />
+            <div className={`mt-1.5 text-[11px] ${hintCls}`}>用于图像、视频、音频等模型服务；无协议时保存为 https://</div>
+          </div>
+
+          <div className={`rounded-xl border p-3 ${panelCls}`}>
+            <div className={`mb-3 flex items-center gap-2 text-sm font-semibold ${labelCls}`}>
+              <Wifi size={15} /> LLM Base URL
+            </div>
+            <input
+              value={llmBaseUrl}
+              onChange={(e) => setLlmBaseUrl(e.target.value)}
+              placeholder={zhenzhenBaseUrl || DEFAULT_ZHENZHEN_BASE}
+              className={inputCls}
+            />
+            <div className={`mt-1.5 text-[11px] ${hintCls}`}>用于 LLM / Vision；留默认时可与模型服务 Base URL 保持一致</div>
           </div>
 
           <div className={`rounded-xl border p-3 ${panelCls}`}>
@@ -366,7 +425,21 @@ export default function ApiSettingsModal({ open, onClose }: ApiSettingsModalProp
             </div>
           </div>
 
+          <div className={`rounded-xl border p-3 ${panelCls}`}>
+            <div className={`mb-3 flex items-center gap-2 text-sm font-semibold ${labelCls}`}>
+              <Wifi size={15} /> RunningHub Base URL
+            </div>
+            <input
+              value={rhBaseUrl}
+              onChange={(e) => setRhBaseUrl(e.target.value)}
+              placeholder={RH_BASE}
+              className={inputCls}
+            />
+            <div className={`mt-1.5 text-[11px] ${hintCls}`}>用于 RunningHub/RH 工作流接口；无协议时保存为 https://</div>
+          </div>
+
           {COMMON_KEYS.map((spec) => renderKey(spec))}
+          {RH_KEYS.map((spec) => renderKey(spec))}
 
           <div className={`border-t pt-4 ${isDark ? 'border-white/10' : 'border-black/10'}`}>
             <div className={`mb-1 text-xs font-bold ${labelCls}`}>分类独立 API Key</div>

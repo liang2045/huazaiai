@@ -297,7 +297,7 @@ export const VIDEO_MODELS: VideoModelDef[] = [
     durations: [5, 10],
     defaultDuration: 5,
     resolutions: ['480P', '720P'],
-    defaultResolution: '480P',
+    defaultResolution: '720P',
     maxReferenceImages: 4,
     description: 'Seedance 分镜视频',
   },

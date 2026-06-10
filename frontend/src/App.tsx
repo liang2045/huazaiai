@@ -15,6 +15,8 @@ import {
   Moon,
   MousePointer2,
   Music,
+  PanelRightClose,
+  PanelRightOpen,
   Frame,
   Plus,
   Save,
@@ -196,6 +198,7 @@ function App() {
   const [creatingProject, setCreatingProject] = useState(false);
   const [savingCanvas, setSavingCanvas] = useState(false);
   const [interactionMode, setInteractionMode] = useState<CanvasInteractionMode>('select');
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(true);
   const [toolMenuOpen, setToolMenuOpen] = useState(false);
   const [downloadNotice, setDownloadNotice] = useState<DownloadNotice | null>(null);
   const [updateNotice, setUpdateNotice] = useState<UpdateNotice | null>(null);
@@ -614,6 +617,28 @@ function App() {
     }
   };
 
+  const openApiConfigSite = async () => {
+    const rawUrl = settings.zhenzhenBaseUrl?.trim();
+    if (!rawUrl) {
+      setSettingsOpen(true);
+      return;
+    }
+    const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+    try {
+      if (window.imade?.openExternal) {
+        const result = await window.imade.openExternal(url);
+        if (result?.ok) return;
+        throw new Error(result?.error || '无法打开 API 配置网站');
+      }
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setDownloadNotice({
+        kind: 'error',
+        message: `无法打开 API 配置网站：${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  };
+
   const openDownloadDirectory = async () => {
     const directory = downloadNotice?.directory;
     if (!directory) return;
@@ -997,13 +1022,10 @@ function App() {
             isDark ? 'border-white/10 bg-black/18' : 'border-black/8 bg-white/72'
           }`}
         >
-          <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${isDark ? 'bg-white/10' : 'bg-zinc-900 text-white'}`}>
-            <FolderOpen size={18} />
-          </div>
-          <div className="mt-5 flex flex-1 flex-col items-center gap-2">
+          <div className="flex flex-1 flex-col items-center gap-2">
             <button
               type="button"
-              className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+              className={`hidden h-10 w-10 items-center justify-center rounded-xl ${
                 isDark ? 'bg-white/10 text-white' : 'bg-zinc-900 text-white'
               }`}
               title="项目"
@@ -1012,12 +1034,31 @@ function App() {
             </button>
             <button
               type="button"
-              onClick={() => importProjectInputRef.current?.click()}
-              disabled={importingProject || creatingProject || backendStatus !== 'ok'}
-              className={`flex h-10 w-10 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-50 ${
+              onClick={openSharedFolder}
+              className={`flex h-10 w-10 items-center justify-center rounded-xl transition ${
                 isDark ? 'text-white/62 hover:bg-white/10 hover:text-white' : 'text-zinc-500 hover:bg-black/5 hover:text-zinc-900'
               }`}
-              title="导入项目"
+              title="本地文件夹"
+            >
+              <FolderOpen size={17} />
+            </button>
+            <button
+              type="button"
+              onClick={openNetdisk}
+              className={`flex h-10 w-10 items-center justify-center rounded-xl transition ${
+                isDark ? 'text-white/62 hover:bg-white/10 hover:text-white' : 'text-zinc-500 hover:bg-black/5 hover:text-zinc-900'
+              }`}
+              title="云盘"
+            >
+              <Cloud size={17} />
+            </button>
+            <button
+              type="button"
+              onClick={openApiConfigSite}
+              className={`hidden h-10 w-10 items-center justify-center rounded-xl transition ${
+                isDark ? 'text-white/62 hover:bg-white/10 hover:text-white' : 'text-zinc-500 hover:bg-black/5 hover:text-zinc-900'
+              }`}
+              title="API 配置网站"
             >
               <Upload size={17} />
             </button>
@@ -1260,6 +1301,17 @@ function App() {
             <Settings size={16} />
           </button>
           <button
+            onClick={() => setInspectorCollapsed((v) => !v)}
+            className={`h-8 w-8 rounded-full flex items-center justify-center transition ${
+              !inspectorCollapsed
+                ? isDark ? 'bg-white/15 text-white' : 'bg-zinc-900 text-white'
+                : isDark ? 'hover:bg-white/10 text-white/80' : 'hover:bg-black/5 text-zinc-700'
+            }`}
+            title={inspectorCollapsed ? '展开属性面板' : '收起属性面板'}
+          >
+            {inspectorCollapsed ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
+          </button>
+          <button
             onClick={toggleTheme}
             className={`h-8 w-8 rounded-full flex items-center justify-center ${isDark ? 'hover:bg-white/10' : 'hover:bg-black/5'}`}
             title={`切换到${isDark ? '浅色' : '深色'}模式`}
@@ -1293,7 +1345,13 @@ function App() {
         )}
 
         <ErrorBoundary fallbackTitle="画布渲染出错，已被错误边界捕获">
-          <Canvas onAddNodeRef={addNodeRef} onSaveRef={saveCanvasRef} interactionMode={interactionMode} />
+          <Canvas
+            onAddNodeRef={addNodeRef}
+            onSaveRef={saveCanvasRef}
+            interactionMode={interactionMode}
+            inspectorCollapsed={inspectorCollapsed}
+            onInspectorCollapsedChange={setInspectorCollapsed}
+          />
         </ErrorBoundary>
 
         <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex justify-center px-4">

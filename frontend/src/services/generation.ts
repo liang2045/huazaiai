@@ -448,6 +448,25 @@ export async function uploadFile(file: File): Promise<{ url: string; filename: s
   return data.data;
 }
 
+export async function importMediaUrl(url: string, fileName?: string): Promise<{
+  url: string;
+  filename: string;
+  size?: number;
+  mime?: string;
+  uploadType?: 'image' | 'video';
+}> {
+  const r = await fetch(apiUrl('/api/files/import-url'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, fileName }),
+  });
+  const data = await r.json();
+  if (!r.ok || !data.success) {
+    throw new Error(data?.error || `HTTP ${r.status}`);
+  }
+  return data.data;
+}
+
 // ========================================================================
 // Video FAL 渠道(独立提交 + 轮询,对齐 gpt-image-2-web runVeo3Fal / runGrokFal)
 //   submitVideoFal 返 { sync, videoUrl? } 或 { sync:false, requestId, responseUrl, endpoint }
